@@ -16,5 +16,9 @@ Whenever I get a haul together, I usually open Notepad and paste links in or jus
 ## Demo
 [![Watch the video](https://img.youtube.com/vi/9zE3h39bgE4/0.jpg)](https://www.youtube.com/watch?v=9zE3h39bgE4)
 
+Trusted Sellers:
+https://www.reddit.com/r/FashionReps/wiki/index
+
 ## To-Do List
 - [ ] Add a checkout option that adds all the products to your selected agent
+- [ ] 
