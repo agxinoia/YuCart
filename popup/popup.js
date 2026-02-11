@@ -1,6 +1,6 @@
 /* ============================================================
    YuCart — Popup Logic
-   Cart display, vendor grouping, currency conversion
+   Cart display, vendor grouping, currency conversion, AI name cleaning
    ============================================================ */
 
 document.addEventListener('DOMContentLoaded', init);
@@ -8,6 +8,8 @@ document.addEventListener('DOMContentLoaded', init);
 let cart = [];
 let settings = {};
 let rateData = null;
+let aiProvider = 'openai';
+let aiApiKey = '';
 
 const CURRENCY_SYMBOLS = {
     USD: '$', EUR: '€', GBP: '£', AUD: 'A$', CAD: 'C$',
@@ -37,6 +39,8 @@ async function init() {
     // Load settings
     const settingsResp = await chrome.runtime.sendMessage({ action: 'getSettings' });
     settings = settingsResp?.settings || { targetCurrency: 'USD' };
+    aiProvider = settings.aiProvider || 'openai';
+    aiApiKey = settings.aiApiKey || '';
 
     // Load rate
     const rateResp = await chrome.runtime.sendMessage({ action: 'getRate', currency: settings.targetCurrency });
@@ -51,6 +55,16 @@ async function init() {
     cart = cartResp?.cart || [];
     render();
 
+    // Show/hide AI buttons based on API key
+    const cleanAllBtn = document.getElementById('cleanAllBtn');
+    const resetNamesBtn = document.getElementById('resetNamesBtn');
+    if (cleanAllBtn) {
+        cleanAllBtn.style.display = aiApiKey ? 'inline-flex' : 'none';
+    }
+    if (resetNamesBtn) {
+        resetNamesBtn.style.display = aiApiKey ? 'inline-flex' : 'none';
+    }
+
     // Event listeners
     document.getElementById('clearBtn').addEventListener('click', handleClear);
     document.getElementById('exportBtn').addEventListener('click', handleExport);
@@ -58,6 +72,12 @@ async function init() {
         e.preventDefault();
         chrome.runtime.openOptionsPage();
     });
+    if (cleanAllBtn) {
+        cleanAllBtn.addEventListener('click', handleCleanAll);
+    }
+    if (resetNamesBtn) {
+        resetNamesBtn.addEventListener('click', handleResetNames);
+    }
 }
 
 // ── Rate Bar ─────────────────────────────────────────────────
@@ -159,13 +179,15 @@ function renderItem(item) {
         : `<div class="cart-item__thumb--placeholder">📦</div>`;
 
     const convertedStr = formatConverted(item.price * item.quantity);
+    const isCleaned = item.cleanedTitle && item.cleanedTitle !== item.title;
+    const displayTitle = isCleaned ? item.cleanedTitle : item.title;
 
     return `
     <div class="cart-item" data-id="${item.id}">
       ${thumbHtml}
       <div class="cart-item__info">
         <div class="cart-item__title">
-          ${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</a>` : escapeHtml(item.title)}
+          ${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" title="${escapeHtml(displayTitle)}">${escapeHtml(displayTitle)}</a>` : escapeHtml(displayTitle)}
         </div>
         <div class="cart-item__price">
           ¥${item.price.toFixed(2)} × ${item.quantity}
@@ -216,6 +238,308 @@ function bindItemEvents() {
     });
 }
 
+// ── Reset Cleaned Names ──────────────────────────────────────
+async function handleResetNames() {
+    const hasCleaned = cart.some(item => item.cleanedTitle);
+    if (!hasCleaned) {
+        showToast('No cleaned names to reset');
+        return;
+    }
+    const resp = await chrome.runtime.sendMessage({ action: 'resetCleanedNames' });
+    cart = resp?.cart || [];
+    render();
+    showToast('Names reset to original');
+}
+
+// ── AI Name Cleaning (Batch) ─────────────────────────────────
+async function handleCleanAll() {
+    if (!aiApiKey) {
+        showToast('Please add your API key in Settings');
+        return;
+    }
+
+    // Filter to items that haven't been cleaned yet
+    const itemsToClean = cart.filter(item => !item.cleanedTitle);
+    if (itemsToClean.length === 0) {
+        showToast('All items already cleaned');
+        return;
+    }
+
+    const cleanAllBtn = document.getElementById('cleanAllBtn');
+    const loadingBar = document.getElementById('aiLoadingBar');
+    cleanAllBtn.classList.add('btn--star--loading');
+    cleanAllBtn.disabled = true;
+    loadingBar.classList.add('ai-loading-bar--active');
+
+    // Track which IDs we're about to clean
+    const cleaningIds = new Set(itemsToClean.map(i => i.id));
+
+    try {
+        // Build JSON payload with cart info (include thumbnail for Gemini vision)
+        const cartData = itemsToClean.map(item => ({
+            id: item.id,
+            name: item.title,
+            link: item.url || '',
+            vendor: item.vendor || '',
+            thumbnail: item.thumbnail || ''
+        }));
+
+        const results = await callAIBatch(cartData);
+
+        let cleanedCount = 0;
+        for (const result of results) {
+            if (result.id && result.cleaned_name) {
+                await chrome.runtime.sendMessage({
+                    action: 'updateItemTitle',
+                    itemId: result.id,
+                    cleanedTitle: result.cleaned_name
+                });
+                cleanedCount++;
+            }
+        }
+
+        // Refresh cart and re-render
+        const cartResp = await chrome.runtime.sendMessage({ action: 'getCart' });
+        cart = cartResp?.cart || [];
+        render();
+
+        // Flash gold on freshly cleaned items
+        cleaningIds.forEach(id => {
+            const el = document.querySelector(`.cart-item[data-id="${id}"] .cart-item__title`);
+            if (el) el.classList.add('cart-item__title--flash');
+        });
+
+        if (cleanedCount > 0) {
+            showToast(`Cleaned ${cleanedCount} item${cleanedCount !== 1 ? 's' : ''}`);
+        } else {
+            showToast('Failed to clean items');
+        }
+    } catch (err) {
+        console.error('AI batch cleaning failed:', err);
+        showToast('Failed: ' + (err.message || 'Unknown error'));
+    } finally {
+        loadingBar.classList.remove('ai-loading-bar--active');
+        cleanAllBtn.classList.remove('btn--star--loading');
+        cleanAllBtn.disabled = false;
+    }
+}
+
+function buildBatchPrompt(cartData) {
+    const cartJson = JSON.stringify(cartData, null, 2);
+    return `Here are products from a Yupoo shopping cart:\n\n${cartJson}\n\nRules:\n- Clean each product name to a readable description (5 words max)\n- Remove all codes, model numbers, random characters, and seller jargon\n- Use the link and vendor as context clues for what the product is\n- If the name is just a code with no real product info, use the vendor name and guess the product type (e.g. "Nike Sneakers", "Designer Bag")\n- Never include codes or numbers in the cleaned name\n\nRespond with ONLY a JSON array, no markdown, no explanation:\n[{"id":"<same id>","cleaned_name":"<cleaned name>"}]`;
+}
+
+async function callAIBatch(cartData) {
+    const prompt = buildBatchPrompt(cartData);
+
+    switch (aiProvider) {
+        case 'openrouter':
+            return await callOpenRouterBatch(prompt, cartData);
+        case 'gemini':
+            return await callGeminiBatch(prompt, cartData);
+        case 'openai':
+        default:
+            return await callOpenAIBatch(prompt, cartData);
+    }
+}
+
+function parseAIJsonResponse(text) {
+    // Strip markdown code fences if present
+    text = text.replace(/```(?:json)?\s*/gi, '').replace(/```\s*/g, '');
+
+    // Find the JSON array by matching balanced brackets
+    const start = text.indexOf('[');
+    if (start === -1) throw new Error('No JSON array in AI response');
+
+    let depth = 0;
+    let end = -1;
+    for (let i = start; i < text.length; i++) {
+        if (text[i] === '[') depth++;
+        else if (text[i] === ']') {
+            depth--;
+            if (depth === 0) { end = i + 1; break; }
+        }
+    }
+    if (end === -1) throw new Error('Malformed JSON array in AI response');
+
+    const jsonStr = text.substring(start, end);
+
+    try {
+        const parsed = JSON.parse(jsonStr);
+        if (!Array.isArray(parsed)) throw new Error('Response is not an array');
+        // Sanitize each result - ensure cleaned_name is a plain string, max 5 words
+        return parsed.map(item => ({
+            id: String(item.id || ''),
+            cleaned_name: String(item.cleaned_name || '').replace(/[<>"'&]/g, '').trim()
+        })).filter(item => item.id && item.cleaned_name);
+    } catch (e) {
+        // Try to fix common JSON issues: trailing commas, single quotes
+        const fixed = jsonStr
+            .replace(/,\s*([}\]])/g, '$1')    // trailing commas
+            .replace(/'/g, '"');                // single quotes
+        const parsed = JSON.parse(fixed);
+        if (!Array.isArray(parsed)) throw new Error('Response is not an array');
+        return parsed.map(item => ({
+            id: String(item.id || ''),
+            cleaned_name: String(item.cleaned_name || '').replace(/[<>"'&]/g, '').trim()
+        })).filter(item => item.id && item.cleaned_name);
+    }
+}
+
+async function callOpenAIBatch(prompt, cartData) {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${aiApiKey}`
+        },
+        body: JSON.stringify({
+            model: 'gpt-3.5-turbo',
+            messages: [
+                { role: 'system', content: 'You clean up messy e-commerce product names. You always respond with valid JSON only.' },
+                { role: 'user', content: prompt }
+            ],
+            max_tokens: 2000,
+            temperature: 0.1
+        })
+    });
+
+    if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error?.message || `HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    const text = data.choices?.[0]?.message?.content?.trim();
+    if (!text) throw new Error('No response from AI');
+    return parseAIJsonResponse(text);
+}
+
+async function callOpenRouterBatch(prompt, cartData) {
+    const makeRequest = () => fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${aiApiKey}`,
+            'HTTP-Referer': 'https://yupoo.com',
+            'X-Title': 'YuCart Extension'
+        },
+        body: JSON.stringify({
+            model: 'z-ai/glm-4.5-air:free',
+            messages: [
+                { role: 'system', content: 'You clean up messy e-commerce product names. You always respond with valid JSON only. No thinking, no explanation.' },
+                { role: 'user', content: prompt }
+            ],
+            max_tokens: 2000,
+            temperature: 0.1
+        })
+    });
+
+    let response = await makeRequest();
+
+    // Retry on rate limit (429) with backoff
+    if (response.status === 429) {
+        for (let retry = 1; retry <= 3; retry++) {
+            await new Promise(resolve => setTimeout(resolve, retry * 3000));
+            response = await makeRequest();
+            if (response.status !== 429) break;
+        }
+    }
+
+    if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error?.message || `HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    const message = data.choices?.[0]?.message;
+    let text = message?.content?.trim();
+
+    // GLM 4.5 Air sometimes puts output in reasoning field
+    if (!text && message?.reasoning) {
+        text = message.reasoning;
+    }
+
+    if (!text) throw new Error('No response from AI');
+    console.log('[YuCart] AI raw response:', text);
+    return parseAIJsonResponse(text);
+}
+
+async function fetchImageAsBase64(url) {
+    try {
+        const resp = await fetch(url);
+        if (!resp.ok) return null;
+        const blob = await resp.blob();
+        return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                const dataUrl = reader.result;
+                // Extract base64 after "data:image/...;base64,"
+                const base64 = dataUrl.split(',')[1];
+                const mimeType = dataUrl.match(/data:(.*?);/)?.[1] || 'image/jpeg';
+                resolve({ base64, mimeType });
+            };
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(blob);
+        });
+    } catch {
+        return null;
+    }
+}
+
+async function callGeminiBatch(prompt, cartData) {
+    // Build multimodal parts: text prompt + product images
+    const parts = [];
+
+    parts.push({
+        text: `You are identifying products from a Yupoo shopping cart. I will show you each product's current name, link, vendor, and its image.\n\nFor each product, figure out what it actually is by looking at the image and context. Give it a clean, readable name (5 words max). Remove all codes, model numbers, and random characters. Never include codes or numbers in the cleaned name.\n\nRespond with ONLY a JSON array, no markdown fences, no explanation:\n[{"id":"<same id>","cleaned_name":"<cleaned name>"}]`
+    });
+
+    // Add each item with its image
+    for (const item of cartData) {
+        parts.push({
+            text: `\n--- Product ---\nID: ${item.id}\nCurrent name: ${item.name}\nVendor: ${item.vendor}\nLink: ${item.link}`
+        });
+
+        if (item.thumbnail) {
+            const imgData = await fetchImageAsBase64(item.thumbnail);
+            if (imgData) {
+                parts.push({
+                    inlineData: {
+                        mimeType: imgData.mimeType,
+                        data: imgData.base64
+                    }
+                });
+            }
+        }
+    }
+
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${aiApiKey}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            contents: [{ parts }],
+            generationConfig: {
+                maxOutputTokens: 2000,
+                temperature: 0.1
+            }
+        })
+    });
+
+    if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error?.message || `HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    if (!text) throw new Error('No response from AI');
+    console.log('[YuCart] Gemini raw response:', text);
+    return parseAIJsonResponse(text);
+}
+
 // ── Clear Cart ───────────────────────────────────────────────
 async function handleClear() {
     if (cart.length === 0) return;
@@ -248,7 +572,8 @@ async function handleExport() {
         for (const item of items) {
             const lineTotal = item.price * item.quantity;
             vendorTotal += lineTotal;
-            text += `  • ${item.title}\n`;
+            const displayTitle = item.cleanedTitle || item.title;
+            text += `  • ${displayTitle}\n`;
             text += `    ¥${item.price.toFixed(2)} × ${item.quantity} = ¥${lineTotal.toFixed(2)}`;
             const conv = formatConverted(lineTotal);
             if (conv) text += ` ${conv}`;
@@ -271,13 +596,17 @@ async function handleExport() {
 }
 
 function showCopiedToast() {
+    showToast('✓ Copied to clipboard');
+}
+
+function showToast(message) {
     let toast = document.querySelector('.copied-toast');
     if (!toast) {
         toast = document.createElement('div');
         toast.className = 'copied-toast';
-        toast.textContent = '✓ Copied to clipboard';
         document.body.appendChild(toast);
     }
+    toast.textContent = message;
     requestAnimationFrame(() => toast.classList.add('copied-toast--visible'));
     setTimeout(() => {
         toast.classList.remove('copied-toast--visible');

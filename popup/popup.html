@@ -29,6 +29,19 @@
             </div>
         </div>
         <div class="header__actions">
+            <button class="btn btn--ghost btn--reset" id="resetNamesBtn" title="Reset cleaned names" style="display:none;">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="1 4 1 10 7 10"></polyline>
+                    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                </svg>
+            </button>
+            <button class="btn btn--ghost btn--star" id="cleanAllBtn" title="Clean all names with AI" style="display:none;">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+                </svg>
+            </button>
             <button class="btn btn--ghost" id="exportBtn" title="Copy cart summary">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                     stroke-linecap="round" stroke-linejoin="round">
@@ -45,6 +58,11 @@
             </button>
         </div>
     </header>
+
+    <!-- AI Loading Bar -->
+    <div class="ai-loading-bar" id="aiLoadingBar">
+        <div class="ai-loading-bar__fill"></div>
+    </div>
 
     <!-- Rate Bar -->
     <div class="rate-bar" id="rateBar">

@@ -148,6 +148,31 @@ body {
     color: var(--text-primary);
 }
 
+.field input[type="password"],
+.field input[type="text"] {
+    width: 100%;
+    padding: 10px 14px;
+    font-size: 13px;
+    font-family: inherit;
+    font-weight: 500;
+    color: var(--text-primary);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    outline: none;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.field input[type="password"]:focus,
+.field input[type="text"]:focus {
+    border-color: var(--teal);
+    box-shadow: 0 0 0 3px var(--teal-soft);
+}
+
+.field input[type="password"]::placeholder {
+    color: var(--text-muted);
+}
+
 /* ── Rate Display ────────────────────────────────────────────── */
 .rate-display {
     display: flex;
@@ -298,4 +323,79 @@ body {
     font-size: 13px;
     font-weight: 500;
     color: var(--text-primary);
+}
+
+/* ── Collapsible Card ────────────────────────────────────────── */
+.card--collapsible {
+    cursor: pointer;
+    overflow: hidden;
+    transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.card__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.card__chevron {
+    color: var(--text-secondary);
+    transition: transform 0.3s ease;
+    flex-shrink: 0;
+}
+
+.card--collapsible:hover .card__chevron {
+    transform: rotate(180deg);
+    color: var(--teal);
+}
+
+.card__content {
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+    transition: all 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.card--collapsible:hover .card__content {
+    max-height: 500px;
+    opacity: 1;
+    margin-top: 12px;
+}
+
+/* ── Developer Credit ────────────────────────────────────────── */
+.developer-credit {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+    padding: 10px 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+
+.developer-credit__text {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.developer-credit__link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-decoration: none;
+    transition: color 0.2s ease;
+}
+
+.developer-credit__link:hover {
+    color: var(--teal);
+}
+
+.developer-credit__link svg {
+    flex-shrink: 0;
+    opacity: 0.8;
 }

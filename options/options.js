@@ -19,6 +19,14 @@ async function init() {
     const darkModeCheckbox = document.getElementById('darkMode');
     darkModeCheckbox.checked = settings.darkMode !== false; // default true
 
+    // Set AI provider and API key
+    const providerSelect = document.getElementById('aiProvider');
+    const apiKeyInput = document.getElementById('aiApiKey');
+    providerSelect.value = settings.aiProvider || 'openai';
+    if (settings.aiApiKey) {
+        apiKeyInput.value = settings.aiApiKey;
+    }
+
     // Load current rate
     loadRate(settings.targetCurrency);
 
@@ -72,9 +80,19 @@ async function refreshRate() {
 }
 
 async function save() {
+    // Load existing settings first to preserve API key if field appears empty (masked)
+    const result = await chrome.storage.sync.get(SETTINGS_KEY);
+    const existingSettings = result[SETTINGS_KEY] || {};
+    
+    const apiKeyInput = document.getElementById('aiApiKey');
+    const apiKey = apiKeyInput.value.trim();
+    
     const settings = {
         targetCurrency: document.getElementById('currency').value,
-        darkMode: document.getElementById('darkMode').checked
+        darkMode: document.getElementById('darkMode').checked,
+        aiProvider: document.getElementById('aiProvider').value,
+        // Only update API key if user entered something (preserve existing if empty)
+        aiApiKey: apiKey || existingSettings.aiApiKey || ''
     };
 
     await chrome.storage.sync.set({ [SETTINGS_KEY]: settings });

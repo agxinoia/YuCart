@@ -128,6 +128,25 @@ async function updateQuantity(itemId, quantity) {
   return cart;
 }
 
+async function updateItemTitle(itemId, cleanedTitle) {
+  const cart = await getCart();
+  const item = cart.find(i => i.id === itemId);
+  if (item) {
+    item.cleanedTitle = cleanedTitle;
+  }
+  await saveCart(cart);
+  return cart;
+}
+
+async function resetCleanedNames() {
+  const cart = await getCart();
+  for (const item of cart) {
+    delete item.cleanedTitle;
+  }
+  await saveCart(cart);
+  return cart;
+}
+
 async function clearCart() {
   await saveCart([]);
   return [];
@@ -182,6 +201,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       case 'updateQuantity': {
         const cart = await updateQuantity(msg.itemId, msg.quantity);
+        sendResponse({ success: true, cart });
+        break;
+      }
+      case 'updateItemTitle': {
+        const cart = await updateItemTitle(msg.itemId, msg.cleanedTitle);
+        sendResponse({ success: true, cart });
+        break;
+      }
+      case 'resetCleanedNames': {
+        const cart = await resetCleanedNames();
         sendResponse({ success: true, cart });
         break;
       }
