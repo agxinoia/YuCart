@@ -279,7 +279,7 @@
     //  ALBUM LISTING PAGE  (grid of albums)
     // ══════════════════════════════════════════════════════════
     function processAlbumListings() {
-        const albums = document.querySelectorAll('.album__main');
+        const albums = document.querySelectorAll('.album__main, .album3__main');
         if (!albums.length) return;
 
         albums.forEach(album => {
@@ -397,7 +397,7 @@
             if (!price) return;
 
             const imgEl = item.querySelector('img');
-            const thumbnail = imgEl?.src || imgEl?.dataset?.src || '';
+            const thumbnail = getImageUrl(imgEl);
             const url = item.href || window.location.href;
             const cleanTitle = titleText.replace(/^\d[\d,.]*\s*[Yy](?:uan)?\s*/, '').trim() || titleText;
 
