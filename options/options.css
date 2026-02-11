@@ -1,0 +1,301 @@
+/* ============================================================
+   YuCart — Options Page Styles
+   ============================================================ */
+
+:root {
+    --bg-primary: #0f0f1a;
+    --bg-secondary: #161628;
+    --bg-card: #1c1c35;
+    --bg-hover: #24243e;
+    --accent: #e94560;
+    --accent-soft: rgba(233, 69, 96, 0.15);
+    --accent-glow: rgba(233, 69, 96, 0.3);
+    --teal: #a8edea;
+    --teal-soft: rgba(168, 237, 234, 0.12);
+    --text-primary: #e8e8f0;
+    --text-secondary: #8888a8;
+    --text-muted: #55557a;
+    --green: #2ecc71;
+    --green-soft: rgba(46, 204, 113, 0.12);
+    --border: rgba(255, 255, 255, 0.06);
+    --radius: 12px;
+    --radius-sm: 8px;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 40px 20px;
+}
+
+.container {
+    width: 100%;
+    max-width: 520px;
+}
+
+/* ── Header ──────────────────────────────────────────────────── */
+.header {
+    margin-bottom: 28px;
+}
+
+.header__brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--accent);
+    margin-bottom: 6px;
+}
+
+.header__brand h1 {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    background: linear-gradient(135deg, #fff, var(--teal));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.header__subtitle {
+    font-size: 13px;
+    color: var(--text-secondary);
+    padding-left: 40px;
+}
+
+/* ── Card ────────────────────────────────────────────────────── */
+.card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 16px;
+}
+
+.card__title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+}
+
+.card__title svg {
+    color: var(--teal);
+}
+
+.card__desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+    line-height: 1.5;
+}
+
+/* ── Field ───────────────────────────────────────────────────── */
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.field label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.field select {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 100%;
+    padding: 10px 14px;
+    font-size: 13px;
+    font-family: inherit;
+    font-weight: 500;
+    color: var(--text-primary);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.2s ease;
+    background-image: url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238888a8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' xmlns='http://www.w3.org/2000/svg'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 36px;
+}
+
+.field select:focus {
+    border-color: var(--teal);
+    box-shadow: 0 0 0 3px var(--teal-soft);
+}
+
+.field select option {
+    background: var(--bg-card);
+    color: var(--text-primary);
+}
+
+/* ── Rate Display ────────────────────────────────────────────── */
+.rate-display {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    margin-top: 12px;
+}
+
+.rate-display__info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.rate-display__value {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--teal);
+    font-variant-numeric: tabular-nums;
+}
+
+.rate-display__time {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+/* ── Buttons ─────────────────────────────────────────────────── */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: inherit;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.btn--primary {
+    background: linear-gradient(135deg, var(--accent), #c23152);
+    color: #fff;
+    padding: 10px 28px;
+    font-size: 13px;
+    box-shadow: 0 4px 16px var(--accent-glow);
+}
+
+.btn--primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px var(--accent-glow);
+}
+
+.btn--primary:active {
+    transform: translateY(0);
+}
+
+.btn--secondary {
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+}
+
+.btn--secondary:hover {
+    color: var(--text-primary);
+    border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* ── Actions ─────────────────────────────────────────────────── */
+.actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 8px;
+}
+
+.save-status {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--green);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.save-status--visible {
+    opacity: 1;
+}
+
+/* ── Toggle Switch ───────────────────────────────────────────── */
+.toggle-label {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.toggle-input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: relative;
+    width: 44px;
+    height: 24px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    transition: all 0.3s ease;
+    flex-shrink: 0;
+}
+
+.toggle-slider::before {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    background: var(--text-muted);
+    border-radius: 50%;
+    transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.toggle-input:checked+.toggle-slider {
+    background: linear-gradient(135deg, var(--accent), #c23152);
+    border-color: var(--accent);
+}
+
+.toggle-input:checked+.toggle-slider::before {
+    transform: translateX(20px);
+    background: #fff;
+}
+
+.toggle-input:focus+.toggle-slider {
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.toggle-text {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+}

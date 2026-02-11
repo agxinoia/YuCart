@@ -1,0 +1,490 @@
+/* ============================================================
+   YuCart — Dark Mode for Yupoo
+   Applies dark theme to Yupoo pages using extension colors
+   ============================================================ */
+
+/* ── Color Variables (matching extension theme) ───────────── */
+:root {
+    --yucart-bg-primary: #0f0f1a;
+    --yucart-bg-secondary: #161628;
+    --yucart-bg-card: #1c1c35;
+    --yucart-bg-hover: #24243e;
+    --yucart-accent: #e94560;
+    --yucart-teal: #a8edea;
+    --yucart-text-primary: #e8e8f0;
+    --yucart-text-secondary: #8888a8;
+    --yucart-text-muted: #55557a;
+    --yucart-border: rgba(255, 255, 255, 0.06);
+}
+
+/* ── Global Page Background ───────────────────────────────── */
+.yucart-dark-mode {
+    background-color: var(--yucart-bg-primary) !important;
+    color: var(--yucart-text-primary) !important;
+}
+
+.yucart-dark-mode body {
+    background-color: var(--yucart-bg-primary) !important;
+    color: var(--yucart-text-primary) !important;
+}
+
+/* ── Top Header Bar (Yupoo Logo Bar) ──────────────────────── */
+.yucart-dark-mode .header__wrap,
+.yucart-dark-mode .header__main {
+    background: var(--yucart-bg-secondary) !important;
+    border-bottom: 1px solid var(--yucart-border) !important;
+}
+
+.yucart-dark-mode .header__main a,
+.yucart-dark-mode .header__login a,
+.yucart-dark-mode .header__username a {
+    color: var(--yucart-text-secondary) !important;
+}
+
+.yucart-dark-mode .header__main a:hover,
+.yucart-dark-mode .header__login a:hover {
+    color: var(--yucart-teal) !important;
+}
+
+/* ── Shop Header & Navigation ─────────────────────────────── */
+.yucart-dark-mode .showheader__headerWrap,
+.yucart-dark-mode .showheader__header {
+    background-color: var(--yucart-bg-secondary) !important;
+    border-bottom: 1px solid var(--yucart-border) !important;
+}
+
+.yucart-dark-mode .showheader__nickname {
+    color: var(--yucart-teal) !important;
+}
+
+.yucart-dark-mode .showheader__menuslink {
+    color: var(--yucart-text-secondary) !important;
+}
+
+.yucart-dark-mode .showheader__menuslink:hover {
+    color: var(--yucart-text-primary) !important;
+}
+
+.yucart-dark-mode .showheader__active,
+.yucart-dark-mode .showheader__menuslink.active {
+    color: var(--yucart-teal) !important;
+}
+
+.yucart-dark-mode .showheader__tabflag {
+    background-color: var(--yucart-teal) !important;
+}
+
+/* ── Category Dropdown ────────────────────────────────────── */
+.yucart-dark-mode .showheader__category_new,
+.yucart-dark-mode .showheader__cateWrap {
+    background-color: var(--yucart-bg-card) !important;
+    border-color: var(--yucart-border) !important;
+}
+
+.yucart-dark-mode .showheader__category_item,
+.yucart-dark-mode .showheader_item {
+    background-color: var(--yucart-bg-card) !important;
+}
+
+.yucart-dark-mode .showheader__link {
+    color: var(--yucart-text-secondary) !important;
+}
+
+.yucart-dark-mode .showheader__link:hover {
+    color: var(--yucart-teal) !important;
+    background-color: var(--yucart-bg-hover) !important;
+}
+
+/* ── Search Bar ───────────────────────────────────────────── */
+.yucart-dark-mode .search__main,
+.yucart-dark-mode .search__inputWrap,
+.yucart-dark-mode .showheader__searchInput {
+    background-color: transparent !important;
+}
+
+.yucart-dark-mode .search__input {
+    background-color: var(--yucart-bg-card) !important;
+    color: var(--yucart-text-primary) !important;
+    border-color: var(--yucart-border) !important;
+}
+
+.yucart-dark-mode .search__input::placeholder {
+    color: var(--yucart-text-muted) !important;
+}
+
+.yucart-dark-mode .search__searchBtn {
+    background-color: var(--yucart-accent) !important;
+    color: #fff !important;
+    border: none !important;
+}
+
+.yucart-dark-mode .search__searchBtn:hover {
+    background-color: #c23152 !important;
+}
+
+/* ── Album Detail Header ──────────────────────────────────── */
+.yucart-dark-mode .showalbumheader__main {
+    background-color: var(--yucart-bg-secondary) !important;
+}
+
+.yucart-dark-mode .showalbumheader__header {
+    background-color: transparent !important;
+}
+
+.yucart-dark-mode .yupoo-crumbs-span,
+.yucart-dark-mode .yupoo-crumbs-span.is-link {
+    color: var(--yucart-text-secondary) !important;
+}
+
+.yucart-dark-mode .yupoo-crumbs-span.is-link:hover {
+    color: var(--yucart-teal) !important;
+}
+
+.yucart-dark-mode .showalbumheader__gallerytitle {
+    color: var(--yucart-text-primary) !important;
+}
+
+.yucart-dark-mode .showalbumheader__gallerydec,
+.yucart-dark-mode .showalbumheader__gallerysubtitle {
+    color: var(--yucart-text-secondary) !important;
+}
+
+.yucart-dark-mode .showalbumheader__gallerydec a {
+    color: var(--yucart-teal) !important;
+}
+
+.yucart-dark-mode .showalbumheader__gallerycover {
+    background-color: var(--yucart-bg-card) !important;
+    border-color: var(--yucart-border) !important;
+}
+
+/* ── Tab Buttons (Big/Detail/Thumbnail) ───────────────────── */
+.yucart-dark-mode .showalbumheader__button {
+    background-color: var(--yucart-bg-card) !important;
+    color: var(--yucart-text-secondary) !important;
+    border-color: var(--yucart-border) !important;
+}
+
+.yucart-dark-mode .showalbumheader__button:hover {
+    background-color: var(--yucart-bg-hover) !important;
+    color: var(--yucart-text-primary) !important;
+}
+
+.yucart-dark-mode .showalbumheader__active {
+    background-color: var(--yucart-accent) !important;
+    color: #fff !important;
+}
+
+/* ── Main Content Area & Image Grid ──────────────────────── */
+.yucart-dark-mode .showalbum__imagecardwrap,
+.yucart-dark-mode .showalbum__parent {
+    background-color: var(--yucart-bg-primary) !important;
+}
+
+.yucart-dark-mode .showalbum__children,
+.yucart-dark-mode .image__main {
+    background-color: var(--yucart-bg-card) !important;
+    border-color: var(--yucart-border) !important;
+}
+
+.yucart-dark-mode .image__imagewrap {
+    background-color: var(--yucart-bg-secondary) !important;
+}
+
+.yucart-dark-mode .image__decwrap {
+    background-color: var(--yucart-bg-card) !important;
+    border-top: 1px solid var(--yucart-border) !important;
+}
+
+.yucart-dark-mode .image__decwrap h3,
+.yucart-dark-mode .image__decwrap .text_overflow {
+    color: var(--yucart-text-primary) !important;
+}
+
+.yucart-dark-mode .image__decwrap p,
+.yucart-dark-mode .image__decwrap time {
+    color: var(--yucart-text-secondary) !important;
+}
+
+/* ── Image Viewer (Lightbox) ─────────────────────────────── */
+.yucart-dark-mode .viewer__main {
+    background-color: rgba(15, 15, 26, 0.98) !important;
+}
+
+.yucart-dark-mode .viewer__left {
+    background-color: var(--yucart-bg-primary) !important;
+}
+
+.yucart-dark-mode .viewer__oldwrap {
+    background-color: var(--yucart-bg-secondary) !important;
+    border-left: 1px solid var(--yucart-border) !important;
+}
+
+.yucart-dark-mode .viewer__infowrap {
+    background-color: var(--yucart-bg-secondary) !important;
+}
+
+.yucart-dark-mode .viewer__title {
+    color: var(--yucart-text-primary) !important;
+}
+
+.yucart-dark-mode .viewer__toolbar {
+    background-color: var(--yucart-bg-secondary) !important;
+    border-top: 1px solid var(--yucart-border) !important;
+}
+
+.yucart-dark-mode .viewer__actionitem {
+    color: var(--yucart-text-secondary) !important;
+}
+
+.yucart-dark-mode .viewer__actionitem:hover {
+    color: var(--yucart-teal) !important;
+}
+
+.yucart-dark-mode .viewer__thumbnails {
+    background-color: var(--yucart-bg-secondary) !important;
+    border-top: 1px solid var(--yucart-border) !important;
+}
+
+.yucart-dark-mode .viewer__thumbnail {
+    border-color: var(--yucart-border) !important;
+}
+
+.yucart-dark-mode .viewer__thumbnail:hover {
+    border-color: var(--yucart-accent) !important;
+}
+
+.yucart-dark-mode .yupoo-viewer-label {
+    color: var(--yucart-text-muted) !important;
+}
+
+.yucart-dark-mode .yupoo-viewer-item a,
+.yucart-dark-mode .yupoo-viewer-inline {
+    color: var(--yucart-text-secondary) !important;
+}
+
+.yucart-dark-mode .yupoo-viewer-item a:hover {
+    color: var(--yucart-teal) !important;
+}
+
+/* ── Broadcast Bar ───────────────────────────────────────── */
+.yucart-dark-mode .broadcastbar__wrap {
+    background-color: var(--yucart-bg-card) !important;
+    border-bottom: 1px solid var(--yucart-border) !important;
+    color: var(--yucart-text-secondary) !important;
+}
+
+.yucart-dark-mode .broadcastbar__wrap pre {
+    color: var(--yucart-text-secondary) !important;
+}
+
+/* ── Share Modal ─────────────────────────────────────────── */
+.yucart-dark-mode .socialshare__shareModal {
+    background-color: var(--yucart-bg-card) !important;
+    border: 1px solid var(--yucart-border) !important;
+}
+
+.yucart-dark-mode .socialshare__topPart h4 {
+    color: var(--yucart-text-primary) !important;
+}
+
+.yucart-dark-mode .socialshare__midPartLine span {
+    color: var(--yucart-text-muted) !important;
+}
+
+.yucart-dark-mode .socialshare__downPart h5 {
+    color: var(--yucart-text-secondary) !important;
+}
+
+/* ── Buttons ──────────────────────────────────────────────── */
+.yucart-dark-mode .button {
+    background-color: var(--yucart-bg-hover) !important;
+    color: var(--yucart-text-primary) !important;
+    border-color: var(--yucart-border) !important;
+}
+
+.yucart-dark-mode .button:hover {
+    background-color: var(--yucart-bg-card) !important;
+    border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+.yucart-dark-mode .button.small {
+    background-color: var(--yucart-bg-card) !important;
+}
+
+/* ── Footer ───────────────────────────────────────────────── */
+.yucart-dark-mode .userfooter__main {
+    background-color: var(--yucart-bg-secondary) !important;
+    border-top: 1px solid var(--yucart-border) !important;
+}
+
+.yucart-dark-mode .userfooter__content,
+.yucart-dark-mode .userfooter__copyright {
+    color: var(--yucart-text-muted) !important;
+}
+
+.yucart-dark-mode .userfooter__main a {
+    color: var(--yucart-text-secondary) !important;
+}
+
+.yucart-dark-mode .userfooter__main a:hover {
+    color: var(--yucart-teal) !important;
+}
+
+/* ── Language Selector ───────────────────────────────────── */
+.yucart-dark-mode .language__link,
+.yucart-dark-mode .language__currentlang {
+    color: var(--yucart-text-secondary) !important;
+}
+
+.yucart-dark-mode #languageSelect {
+    background-color: var(--yucart-bg-card) !important;
+    border: 1px solid var(--yucart-border) !important;
+}
+
+.yucart-dark-mode #languageSelect li {
+    color: var(--yucart-text-secondary) !important;
+}
+
+.yucart-dark-mode #languageSelect li:hover {
+    background-color: var(--yucart-bg-hover) !important;
+    color: var(--yucart-teal) !important;
+}
+
+/* ── Dropdown Menus ──────────────────────────────────────── */
+.yucart-dark-mode .header__dropdown ul {
+    background-color: var(--yucart-bg-card) !important;
+    border: 1px solid var(--yucart-border) !important;
+}
+
+.yucart-dark-mode .header__dropdown li {
+    color: var(--yucart-text-secondary) !important;
+}
+
+.yucart-dark-mode .header__dropdown li:hover {
+    background-color: var(--yucart-bg-hover) !important;
+    color: var(--yucart-teal) !important;
+}
+
+/* ── Search Modals ───────────────────────────────────────── */
+.yucart-dark-mode .search__loginModal {
+    background-color: var(--yucart-bg-card) !important;
+    border: 1px solid var(--yucart-border) !important;
+}
+
+.yucart-dark-mode .search__loginModal p {
+    color: var(--yucart-text-secondary) !important;
+}
+
+/* ── QR Code Section ─────────────────────────────────────── */
+.yucart-dark-mode .showheader__qrcodewrap {
+    background-color: var(--yucart-bg-card) !important;
+}
+
+.yucart-dark-mode .showheader__qrcodetext {
+    color: var(--yucart-text-secondary) !important;
+}
+
+/* ── Alerts ──────────────────────────────────────────────── */
+.yucart-dark-mode .alert__main {
+    background-color: rgba(0, 0, 0, 0.8) !important;
+}
+
+.yucart-dark-mode .alert__alert {
+    background-color: var(--yucart-bg-card) !important;
+    border: 1px solid var(--yucart-border) !important;
+}
+
+.yucart-dark-mode .alert__title {
+    color: var(--yucart-text-primary) !important;
+}
+
+.yucart-dark-mode .alert__content {
+    color: var(--yucart-text-secondary) !important;
+}
+
+/* ── Layout Panel (for layouts) ──────────────────────────── */
+.yucart-dark-mode .showlayout__wrap {
+    background-color: rgba(0, 0, 0, 0.8) !important;
+}
+
+.yucart-dark-mode .showlayout__panel {
+    background-color: var(--yucart-bg-card) !important;
+    border: 1px solid var(--yucart-border) !important;
+}
+
+.yucart-dark-mode .showlayout__action button {
+    background-color: var(--yucart-bg-hover) !important;
+    color: var(--yucart-text-primary) !important;
+    border-color: var(--yucart-border) !important;
+}
+
+.yucart-dark-mode .showlayout__action button:hover {
+    background-color: var(--yucart-accent) !important;
+}
+
+/* ── Scrollbars ───────────────────────────────────────────── */
+.yucart-dark-mode ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+.yucart-dark-mode ::-webkit-scrollbar-track {
+    background: var(--yucart-bg-primary);
+}
+
+.yucart-dark-mode ::-webkit-scrollbar-thumb {
+    background: var(--yucart-bg-hover);
+    border-radius: 5px;
+}
+
+.yucart-dark-mode ::-webkit-scrollbar-thumb:hover {
+    background: var(--yucart-text-muted);
+}
+
+/* ── Preserve Extension Elements ────────────────────────────
+   These are YuCart's own UI elements - dark mode should not touch them.
+   We only reset the properties that dark mode might have inherited
+   from Yupoo's page styles, while preserving our custom styling. */
+
+.yucart-dark-mode .yucart-album-overlay,
+.yucart-dark-mode .yucart-detail-bar,
+.yucart-dark-mode .yucart-toast {
+    /* Reset only color/inheritance properties, not all styles */
+    color: inherit;
+    background-color: transparent;
+}
+
+/* Don't apply any Yupoo dark mode overrides to YuCart buttons
+   The button styles in content.css use !important and will win */
+.yucart-dark-mode .yucart-add-btn,
+.yucart-dark-mode .yucart-add-btn *,
+.yucart-dark-mode .yucart-price-badge {
+    /* Allow the button's own styles to apply */
+    color: inherit;
+}
+
+/* Ensure text spans inside buttons don't get dark mode text colors */
+.yucart-dark-mode .yucart-add-btn__text,
+.yucart-dark-mode .yucart-add-btn__price {
+    color: inherit !important;
+}
+
+/* ── Image hover effects (performance optimization) ──────── */
+.yucart-dark-mode img {
+    opacity: 1;
+}
+
+/* ── Override Yupoo's Green Theme Colors ─────────────────── */
+.yucart-dark-mode [style*="background-color: rgb(73, 188, 133)"],
+.yucart-dark-mode [style*="background-color: rgb(66, 184, 131)"],
+.yucart-dark-mode [style*="background: rgb(73, 188, 133)"],
+.yucart-dark-mode [style*="background: linear-gradient"] {
+    background: var(--yucart-bg-secondary) !important;
+    background-image: none !important;
+}
+
+.yucart-dark-mode [style*="color: rgb(73, 188, 133)"],
+.yucart-dark-mode [style*="color: rgb(66, 184, 131)"] {
+    color: var(--yucart-teal) !important;
+}
