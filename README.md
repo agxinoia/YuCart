@@ -14,8 +14,7 @@ Whenever I get a haul together, I usually open Notepad and paste links in or jus
 - **Dark Mode**: Seamless dark mode integration for late-night shopping.
 
 ## Demo
-<video src="tut.mp4" controls="controls" style="max-width: 100%;">
-</video>
+[![Watch the video](https://img.youtube.com/vi/9zE3h39bgE4/0.jpg)](https://www.youtube.com/watch?v=9zE3h39bgE4)
 
 ## To-Do List
 - [ ] Add a checkout option that adds all the products to your selected agent
