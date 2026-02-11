@@ -14,7 +14,7 @@ Whenever I get a haul together, I usually open Notepad and paste links in or jus
 - **Dark Mode**: Seamless dark mode integration for late-night shopping.
 
 ## Demo
-<video src="documents/tut.mp4" controls="controls" style="max-width: 100%;">
+<video src="tut.mp4" controls="controls" style="max-width: 100%;">
 </video>
 
 ## To-Do List
