@@ -15,6 +15,76 @@ const DEFAULT_SETTINGS = {
   darkMode: true  // Dark mode enabled by default
 };
 
+// ── Update Checking ──────────────────────────────────────────
+const UPDATE_CHECK_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
+const VERSION_URL = 'https://raw.githubusercontent.com/YOUR_USERNAME/yucart/main/version.json';
+const CURRENT_VERSION = '1.3.0'; // Match manifest.json version
+const UPDATE_STORAGE_KEY = 'yucart_update_info';
+
+// Check for updates by comparing against GitHub version file
+async function checkForUpdates() {
+  try {
+    const response = await fetch(VERSION_URL);
+    if (!response.ok) {
+      console.log('[YuCart] Update check failed:', response.status);
+      return;
+    }
+
+    const data = await response.json();
+
+    if (compareVersions(data.version, CURRENT_VERSION) > 0) {
+      // New version available
+      const updateInfo = {
+        updateAvailable: true,
+        latestVersion: data.version,
+        releaseUrl: data.releaseUrl || 'https://github.com/agxinoia/YuCart/releases/latest',
+        updateMessage: data.message || 'New update available with improvements and bug fixes!',
+        checkedAt: Date.now()
+      };
+
+      await chrome.storage.local.set({ [UPDATE_STORAGE_KEY]: updateInfo });
+
+      // Show badge on extension icon
+      chrome.action.setBadgeText({ text: '!' });
+      chrome.action.setBadgeBackgroundColor({ color: '#FF6B35' });
+
+      console.log('[YuCart] ✨ Update available:', data.version);
+    } else {
+      // Clear any previous update notification
+      await chrome.storage.local.set({
+        [UPDATE_STORAGE_KEY]: {
+          updateAvailable: false,
+          checkedAt: Date.now()
+        }
+      });
+      console.log('[YuCart] ✅ Already on latest version');
+    }
+  } catch (error) {
+    console.error('[YuCart] Failed to check for updates:', error);
+  }
+}
+
+// Compare two semantic version strings (e.g., "1.2.0" vs "1.3.0")
+// Returns: 1 if v1 > v2, -1 if v1 < v2, 0 if equal
+function compareVersions(v1, v2) {
+  const parts1 = v1.split('.').map(Number);
+  const parts2 = v2.split('.').map(Number);
+
+  for (let i = 0; i < 3; i++) {
+    if (parts1[i] > parts2[i]) return 1;
+    if (parts1[i] < parts2[i]) return -1;
+  }
+  return 0;
+}
+
+// Schedule the next update check
+function scheduleNextCheck() {
+  setTimeout(() => {
+    checkForUpdates();
+    scheduleNextCheck();
+  }, UPDATE_CHECK_INTERVAL);
+}
+
 // ── Fetch exchange rate ──────────────────────────────────────
 async function fetchExchangeRate(targetCurrency = 'USD') {
   try {
@@ -170,6 +240,7 @@ chrome.runtime.onStartup?.addListener(async () => {
   const cart = await getCart();
   updateBadge(cart);
   await updateImageRules();
+  checkForUpdates();
 });
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -178,6 +249,8 @@ chrome.runtime.onInstalled.addListener(async () => {
   const settings = await getSettings();
   await fetchExchangeRate(settings.targetCurrency);
   await updateImageRules();
+  checkForUpdates();
+  scheduleNextCheck();
 });
 
 // ── Message handler ──────────────────────────────────────────
@@ -241,6 +314,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case 'prepareImages': {
         // Popup calls this before rendering to refresh DNR cookie rules
         await updateImageRules();
+        sendResponse({ success: true });
+        break;
+      }
+      case 'getUpdateInfo': {
+        const result = await chrome.storage.local.get(UPDATE_STORAGE_KEY);
+        const updateInfo = result[UPDATE_STORAGE_KEY] || { updateAvailable: false };
+        sendResponse({ updateInfo });
+        break;
+      }
+      case 'dismissUpdate': {
+        await chrome.storage.local.set({
+          [UPDATE_STORAGE_KEY]: {
+            updateAvailable: false,
+            dismissed: true,
+            dismissedAt: Date.now()
+          }
+        });
+        // Clear badge if cart is empty
+        const cart = await getCart();
+        updateBadge(cart);
         sendResponse({ success: true });
         break;
       }

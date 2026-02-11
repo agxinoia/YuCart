@@ -55,6 +55,9 @@ async function init() {
     cart = cartResp?.cart || [];
     render();
 
+    // Check for updates
+    await checkAndShowUpdateNotification();
+
     // Show/hide AI buttons based on API key
     const cleanAllBtn = document.getElementById('cleanAllBtn');
     const resetNamesBtn = document.getElementById('resetNamesBtn');
@@ -89,6 +92,53 @@ function updateRateBar() {
     } else {
         el.textContent = 'Unavailable';
     }
+}
+
+// ── Update Notification ──────────────────────────────────────
+async function checkAndShowUpdateNotification() {
+    const resp = await chrome.runtime.sendMessage({ action: 'getUpdateInfo' });
+    const updateInfo = resp?.updateInfo;
+
+    if (updateInfo?.updateAvailable && !updateInfo.dismissed) {
+        showUpdateBanner(updateInfo);
+    }
+}
+
+function showUpdateBanner(updateInfo) {
+    // Remove any existing banner
+    const existingBanner = document.querySelector('.update-banner');
+    if (existingBanner) existingBanner.remove();
+
+    const banner = document.createElement('div');
+    banner.className = 'update-banner';
+    banner.innerHTML = `
+        <div class="update-banner__content">
+            <div class="update-banner__icon">🎉</div>
+            <div class="update-banner__text">
+                <strong class="update-banner__title">Update Available: v${escapeHtml(updateInfo.latestVersion)}</strong>
+                <p class="update-banner__message">${escapeHtml(updateInfo.updateMessage)}</p>
+            </div>
+            <div class="update-banner__actions">
+                <a href="${escapeHtml(updateInfo.releaseUrl)}" target="_blank" class="update-banner__btn update-banner__btn--primary">
+                    View Update
+                </a>
+                <button id="dismissUpdateBtn" class="update-banner__btn update-banner__btn--ghost">
+                    Dismiss
+                </button>
+            </div>
+        </div>
+    `;
+
+    // Insert after header
+    const header = document.querySelector('.header');
+    header.after(banner);
+
+    // Bind dismiss handler
+    document.getElementById('dismissUpdateBtn').addEventListener('click', async () => {
+        await chrome.runtime.sendMessage({ action: 'dismissUpdate' });
+        banner.classList.add('update-banner--dismissing');
+        setTimeout(() => banner.remove(), 300);
+    });
 }
 
 // ── Render ───────────────────────────────────────────────────
