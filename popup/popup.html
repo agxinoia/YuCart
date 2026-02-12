@@ -93,7 +93,24 @@
                 </div>
             </div>
         </div>
+        <button class="checkout-btn" id="checkoutBtn" title="Checkout to agent">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            <span id="checkoutBtnText">Checkout</span>
+        </button>
     </footer>
+
+    <!-- Checkout Splash Screen -->
+    <div class="checkout-splash" id="checkoutSplash" style="display:none;">
+        <div class="checkout-splash__content">
+            <div class="checkout-splash__spinner"></div>
+            <h2 class="checkout-splash__title">Adding to Agent Cart</h2>
+            <p class="checkout-splash__status" id="checkoutStatus">Preparing...</p>
+            <p class="checkout-splash__progress" id="checkoutProgress"></p>
+        </div>
+    </div>
 
     <!-- Settings link -->
     <div class="settings-link">

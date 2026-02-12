@@ -408,6 +408,59 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ success: true });
           break;
         }
+        case 'agentCheckoutTab': {
+          const tabUrl = msg.url;
+          const selector = msg.addToCartSelector;
+          try {
+            const tab = await chrome.tabs.create({ url: tabUrl, active: false });
+            // Wait for the tab to finish loading
+            await new Promise((resolve, reject) => {
+              const timeout = setTimeout(() => {
+                chrome.tabs.onUpdated.removeListener(listener);
+                resolve(); // resolve anyway so checkout continues
+              }, 20000);
+              function listener(tabId, changeInfo) {
+                if (tabId === tab.id && changeInfo.status === 'complete') {
+                  chrome.tabs.onUpdated.removeListener(listener);
+                  clearTimeout(timeout);
+                  resolve();
+                }
+              }
+              chrome.tabs.onUpdated.addListener(listener);
+            });
+            // Inject auto-click script if selector is provided
+            if (selector) {
+              // Wait a bit for page JS to render the button
+              await new Promise(r => setTimeout(r, 2000));
+              try {
+                await chrome.scripting.executeScript({
+                  target: { tabId: tab.id },
+                  func: (sel) => {
+                    function tryClick(attempts) {
+                      const btn = document.querySelector(sel);
+                      if (btn) {
+                        btn.click();
+                        return;
+                      }
+                      if (attempts > 0) {
+                        setTimeout(() => tryClick(attempts - 1), 1000);
+                      }
+                    }
+                    tryClick(10);
+                  },
+                  args: [selector]
+                });
+              } catch (scriptErr) {
+                console.warn('[YuCart BG] Auto-click script failed:', scriptErr.message);
+              }
+            }
+            sendResponse({ success: true, tabId: tab.id });
+          } catch (tabErr) {
+            console.error('[YuCart BG] Failed to open tab:', tabErr);
+            sendResponse({ success: false, error: tabErr.message });
+          }
+          break;
+        }
         default:
           sendResponse({ error: 'Unknown action' });
       }

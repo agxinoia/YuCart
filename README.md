@@ -1,6 +1,6 @@
 # YuCart — Yupoo Shopping Cart
 
-![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)
+![Version](https://img.shields.io/badge/version-1.7-blue.svg)
 
 ## Why YuCart?
 Whenever I get a haul together, I usually open Notepad and paste links in or just add items to my agent's cart. However, because stores often blur and censor item names, I wouldn’t be able to identify what I put in my cart a week ago. I created YuCart as my fix for this problem, allowing for better organization and clarity when shopping on Yupoo.

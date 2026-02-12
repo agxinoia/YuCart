@@ -15,6 +15,10 @@ async function init() {
     const currencySelect = document.getElementById('currency');
     currencySelect.value = settings.targetCurrency || 'USD';
 
+    // Set agent dropdown
+    const agentSelect = document.getElementById('selectedAgent');
+    agentSelect.value = settings.selectedAgent || 'superbuy';
+
     // Set dark mode checkbox
     const darkModeCheckbox = document.getElementById('darkMode');
     darkModeCheckbox.checked = settings.darkMode !== false; // default true
@@ -89,6 +93,7 @@ async function save() {
     
     const settings = {
         targetCurrency: document.getElementById('currency').value,
+        selectedAgent: document.getElementById('selectedAgent').value,
         darkMode: document.getElementById('darkMode').checked,
         aiProvider: document.getElementById('aiProvider').value,
         // Only update API key if user entered something (preserve existing if empty)

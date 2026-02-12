@@ -71,6 +71,7 @@ async function init() {
     // Event listeners
     document.getElementById('clearBtn').addEventListener('click', handleClear);
     document.getElementById('exportBtn').addEventListener('click', handleExport);
+    document.getElementById('checkoutBtn').addEventListener('click', handleCheckout);
     document.getElementById('settingsLink').addEventListener('click', (e) => {
         e.preventDefault();
         chrome.runtime.openOptionsPage();
@@ -200,6 +201,11 @@ function render() {
     // Totals
     document.getElementById('totalCNY').textContent = `¥${grandTotal.toFixed(2)}`;
     document.getElementById('totalConverted').textContent = formatConverted(grandTotal);
+
+    // Update checkout button text with agent name
+    const agentNames = { superbuy: 'Superbuy', kakobuy: 'KakoBuy', sugargoo: 'Sugargoo', raw: 'Raw Link' };
+    const agentName = agentNames[settings.selectedAgent || 'superbuy'] || 'Agent';
+    document.getElementById('checkoutBtnText').textContent = `Checkout to ${agentName}`;
 
     // Bind events
     bindItemEvents();
@@ -752,6 +758,98 @@ const _escapeRe = /[&<>"']/g;
 function escapeHtml(str) {
     if (!str) return '';
     return String(str).replace(_escapeRe, c => _escapeMap[c]);
+}
+
+// ── Agent Checkout ───────────────────────────────────────────
+
+const AGENT_URL_BUILDERS = {
+    superbuy: (rawUrl) => `https://www.superbuy.com/en/page/buy/?nTag=Home-search&from=search-input&url=${encodeURIComponent(rawUrl)}`,
+    kakobuy: (rawUrl) => `https://www.kakobuy.com/item/details?url=${encodeURIComponent(rawUrl)}`,
+    sugargoo: (rawUrl) => `https://www.sugargoo.com/products?productLink=${encodeURIComponent(encodeURIComponent(rawUrl))}`,
+    raw: (rawUrl) => rawUrl
+};
+
+const AGENT_ADD_CART_SELECTORS = {
+    superbuy: '.goods-addToCart, .btn-addToCart, button[class*="addToCart"]',
+    kakobuy: '.goods-addToCart, .product-action .btn-cart, button[class*="addToCart"]',
+    sugargoo: '.goods-addToCart, .add-cart-btn, button[class*="addToCart"]',
+    raw: null
+};
+
+function extractProductLink(subtitle) {
+    if (!subtitle) return null;
+    // Match weidian.com or taobao.com URLs
+    const urlRegex = /https?:\/\/[^\s]*(?:weidian\.com|taobao\.com|item\.taobao)[^\s]*/i;
+    const match = subtitle.match(urlRegex);
+    return match ? match[0] : null;
+}
+
+async function handleCheckout() {
+    const agent = settings.selectedAgent || 'superbuy';
+    const urlBuilder = AGENT_URL_BUILDERS[agent];
+    if (!urlBuilder) {
+        showToast('Unknown agent selected');
+        return;
+    }
+
+    // Collect items with valid product links
+    const checkoutItems = [];
+    for (const item of cart) {
+        const link = extractProductLink(item.subtitle);
+        if (link) {
+            checkoutItems.push({ item, agentUrl: urlBuilder(link) });
+        }
+    }
+
+    if (checkoutItems.length === 0) {
+        showToast('No items have Weidian/Taobao links');
+        return;
+    }
+
+    // Show splash
+    const splash = document.getElementById('checkoutSplash');
+    const statusEl = document.getElementById('checkoutStatus');
+    const progressEl = document.getElementById('checkoutProgress');
+    splash.style.display = 'flex';
+
+    const selector = AGENT_ADD_CART_SELECTORS[agent];
+
+    try {
+        for (let i = 0; i < checkoutItems.length; i++) {
+            const { item, agentUrl } = checkoutItems[i];
+            const displayTitle = item.cleanedTitle || item.title;
+            statusEl.textContent = `Opening: ${displayTitle.slice(0, 40)}...`;
+            progressEl.textContent = `${i + 1} of ${checkoutItems.length}`;
+
+            // Ask background to open tab, wait for load, and click add-to-cart
+            await chrome.runtime.sendMessage({
+                action: 'agentCheckoutTab',
+                url: agentUrl,
+                addToCartSelector: selector
+            });
+
+            // Small delay between tabs to avoid overwhelming the agent site
+            if (i < checkoutItems.length - 1) {
+                await new Promise(r => setTimeout(r, 800));
+            }
+        }
+
+        const skipped = cart.length - checkoutItems.length;
+        statusEl.textContent = `Done! Opened ${checkoutItems.length} item${checkoutItems.length !== 1 ? 's' : ''}`;
+        if (skipped > 0) {
+            progressEl.textContent = `${skipped} item${skipped !== 1 ? 's' : ''} skipped (no product link)`;
+        } else {
+            progressEl.textContent = '';
+        }
+    } catch (err) {
+        statusEl.textContent = 'Error: ' + (err.message || 'Checkout failed');
+        progressEl.textContent = '';
+    }
+
+    // Auto-dismiss splash after a moment
+    setTimeout(() => {
+        splash.style.display = 'none';
+    }, 2500);
 }
 
 // ── Scrolling Overflow Titles ────────────────────────────────

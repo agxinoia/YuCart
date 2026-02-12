@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YuCart — Yupoo Shopping Cart",
-  "version": "1.6.5",
+  "version": "1.7",
   "description": "Shopping cart for Yupoo",
   "icons": {
     "16": "icons/icon16.png",
@@ -13,7 +13,8 @@
     "activeTab",
     "cookies",
     "declarativeNetRequest",
-    "alarms"
+    "alarms",
+    "scripting"
   ],
   "host_permissions": [
     "https://open.er-api.com/*",
@@ -21,7 +22,10 @@
     "http://*.yupoo.com/*",
     "https://api.openai.com/*",
     "https://openrouter.ai/*",
-    "https://generativelanguage.googleapis.com/*"
+    "https://generativelanguage.googleapis.com/*",
+    "https://www.superbuy.com/*",
+    "https://www.kakobuy.com/*",
+    "https://www.sugargoo.com/*"
   ],
   "action": {
     "default_popup": "popup/popup.html",
