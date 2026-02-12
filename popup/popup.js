@@ -776,12 +776,21 @@ const AGENT_ADD_CART_SELECTORS = {
     raw: null
 };
 
-function extractProductLink(subtitle) {
-    if (!subtitle) return null;
-    // Match weidian.com or taobao.com URLs
-    const urlRegex = /https?:\/\/[^\s]*(?:weidian\.com|taobao\.com|item\.taobao)[^\s]*/i;
-    const match = subtitle.match(urlRegex);
-    return match ? match[0] : null;
+function extractProductLink(item) {
+    // Try subtitle first (detail page stores the source link here)
+    const candidates = [item.subtitle, item.url, item.title];
+    for (const text of candidates) {
+        if (!text) continue;
+        // Match weidian, taobao, or 1688 URLs
+        const urlRegex = /https?:\/\/[^\s<>"']*(?:weidian\.com|taobao\.com|1688\.com)[^\s<>"']*/i;
+        const match = text.match(urlRegex);
+        if (match) return match[0];
+        // Try without protocol (some subtitles omit https://)
+        const noProto = /(?:weidian\.com|taobao\.com|1688\.com)\/[^\s<>"']*/i;
+        const match2 = text.match(noProto);
+        if (match2) return 'https://' + match2[0];
+    }
+    return null;
 }
 
 async function handleCheckout() {
@@ -795,14 +804,14 @@ async function handleCheckout() {
     // Collect items with valid product links
     const checkoutItems = [];
     for (const item of cart) {
-        const link = extractProductLink(item.subtitle);
+        const link = extractProductLink(item);
         if (link) {
             checkoutItems.push({ item, agentUrl: urlBuilder(link) });
         }
     }
 
     if (checkoutItems.length === 0) {
-        showToast('No items have Weidian/Taobao links');
+        showToast('No Weidian/Taobao links found — add items from detail pages');
         return;
     }
 
@@ -813,43 +822,54 @@ async function handleCheckout() {
     splash.style.display = 'flex';
 
     const selector = AGENT_ADD_CART_SELECTORS[agent];
+    let addedCount = 0;
+    let failedCount = 0;
 
     try {
         for (let i = 0; i < checkoutItems.length; i++) {
             const { item, agentUrl } = checkoutItems[i];
-            const displayTitle = item.cleanedTitle || item.title;
-            statusEl.textContent = `Opening: ${displayTitle.slice(0, 40)}...`;
+            const displayTitle = (item.cleanedTitle || item.title).slice(0, 40);
+            statusEl.textContent = `Opening: ${displayTitle}...`;
             progressEl.textContent = `${i + 1} of ${checkoutItems.length}`;
 
-            // Ask background to open tab, wait for load, and click add-to-cart
-            await chrome.runtime.sendMessage({
+            const resp = await chrome.runtime.sendMessage({
                 action: 'agentCheckoutTab',
                 url: agentUrl,
                 addToCartSelector: selector
             });
 
-            // Small delay between tabs to avoid overwhelming the agent site
+            if (resp?.clicked) {
+                addedCount++;
+                statusEl.textContent = `✓ Added: ${displayTitle}`;
+            } else if (agent === 'raw') {
+                addedCount++;
+                statusEl.textContent = `✓ Opened: ${displayTitle}`;
+            } else {
+                failedCount++;
+                statusEl.textContent = `⚠ May not have added: ${displayTitle}`;
+            }
+
+            // Delay between items to avoid rate-limiting
             if (i < checkoutItems.length - 1) {
-                await new Promise(r => setTimeout(r, 800));
+                await new Promise(r => setTimeout(r, 1000));
             }
         }
 
         const skipped = cart.length - checkoutItems.length;
-        statusEl.textContent = `Done! Opened ${checkoutItems.length} item${checkoutItems.length !== 1 ? 's' : ''}`;
-        if (skipped > 0) {
-            progressEl.textContent = `${skipped} item${skipped !== 1 ? 's' : ''} skipped (no product link)`;
-        } else {
-            progressEl.textContent = '';
-        }
+        let summary = `Done! ${addedCount} added`;
+        if (failedCount > 0) summary += `, ${failedCount} uncertain`;
+        if (skipped > 0) summary += `, ${skipped} skipped`;
+        statusEl.textContent = summary;
+        progressEl.textContent = failedCount > 0 ? 'Check agent tabs for uncertain items' : '';
     } catch (err) {
         statusEl.textContent = 'Error: ' + (err.message || 'Checkout failed');
         progressEl.textContent = '';
     }
 
-    // Auto-dismiss splash after a moment
+    // Auto-dismiss splash
     setTimeout(() => {
         splash.style.display = 'none';
-    }, 2500);
+    }, 3000);
 }
 
 // ── Scrolling Overflow Titles ────────────────────────────────

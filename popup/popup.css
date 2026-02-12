@@ -676,8 +676,8 @@ body::-webkit-scrollbar-thumb {
 /* ── Settings Link ───────────────────────────────────────────── */
 .settings-link {
     display: flex;
-    justify-content: center;
-    padding: 10px 0 14px;
+    justify-content: space-between;
+    padding: 10px 16px 14px;
 }
 
 .settings-link a {

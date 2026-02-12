@@ -213,7 +213,61 @@ async function addToCart(item) {
     });
   }
   await saveCart(cart);
+
+  // If no subtitle (product source link), try to scrape it from the Yupoo detail page
+  const target = existing || cart[cart.length - 1];
+  if (!target.subtitle && target.url && target.url.includes('yupoo.com')) {
+    scrapeSubtitle(target.id, target.url);
+  }
+
   return cart;
+}
+
+// Fetch a Yupoo album page and extract the product source link from the subtitle
+async function scrapeSubtitle(itemId, albumUrl) {
+  try {
+    const resp = await fetch(albumUrl, { credentials: 'omit' });
+    if (!resp.ok) return;
+    const html = await resp.text();
+
+    // Parse the gallerysubtitle anchor's href
+    // Pattern: <a ... href="...external?url=ENCODED_URL..."...> inside gallerysubtitle
+    const subtitleMatch = html.match(
+      /gallerysubtitle[\s\S]*?<a[^>]+href=["']([^"']+)["']/i
+    );
+    if (!subtitleMatch) return;
+
+    const href = subtitleMatch[1];
+    let productUrl = '';
+
+    // Unwrap Yupoo redirect: /external?url=<encoded>
+    const urlParam = href.match(/[?&]url=([^&]+)/);
+    if (urlParam) {
+      try {
+        productUrl = decodeURIComponent(decodeURIComponent(urlParam[1]));
+      } catch {
+        productUrl = decodeURIComponent(urlParam[1]);
+      }
+    } else {
+      productUrl = href;
+    }
+
+    if (!productUrl) return;
+
+    // Only store if it's a known source site
+    if (!/weidian\.com|taobao\.com|1688\.com/i.test(productUrl)) return;
+
+    // Update the cart item's subtitle
+    const cart = await getCart();
+    const item = cart.find(i => i.id === itemId);
+    if (item && !item.subtitle) {
+      item.subtitle = productUrl;
+      await saveCart(cart);
+      console.log('[YuCart BG] Scraped subtitle for', itemId, ':', productUrl);
+    }
+  } catch (e) {
+    console.warn('[YuCart BG] Subtitle scrape failed:', e.message);
+  }
 }
 
 async function removeFromCart(itemId) {
@@ -413,12 +467,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           const selector = msg.addToCartSelector;
           try {
             const tab = await chrome.tabs.create({ url: tabUrl, active: false });
-            // Wait for the tab to finish loading
-            await new Promise((resolve, reject) => {
+
+            // 1. Wait for tab to reach 'complete' status
+            await new Promise((resolve) => {
               const timeout = setTimeout(() => {
                 chrome.tabs.onUpdated.removeListener(listener);
-                resolve(); // resolve anyway so checkout continues
-              }, 20000);
+                resolve();
+              }, 30000);
               function listener(tabId, changeInfo) {
                 if (tabId === tab.id && changeInfo.status === 'complete') {
                   chrome.tabs.onUpdated.removeListener(listener);
@@ -428,33 +483,150 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
               }
               chrome.tabs.onUpdated.addListener(listener);
             });
-            // Inject auto-click script if selector is provided
-            if (selector) {
-              // Wait a bit for page JS to render the button
-              await new Promise(r => setTimeout(r, 2000));
+
+            if (!selector) {
+              sendResponse({ success: true, tabId: tab.id, clicked: false });
+              break;
+            }
+
+            // 2. Poll inside the page until button appears, click it, then verify
+            //    The injected function returns a result we can check.
+            const maxPolls = 8;
+            let clicked = false;
+
+            for (let attempt = 0; attempt < maxPolls; attempt++) {
+              // Wait before each attempt — gives SPA time to render
+              await new Promise(r => setTimeout(r, attempt === 0 ? 2500 : 2000));
+
               try {
-                await chrome.scripting.executeScript({
+                const results = await chrome.scripting.executeScript({
                   target: { tabId: tab.id },
                   func: (sel) => {
-                    function tryClick(attempts) {
-                      const btn = document.querySelector(sel);
-                      if (btn) {
-                        btn.click();
-                        return;
-                      }
-                      if (attempts > 0) {
-                        setTimeout(() => tryClick(attempts - 1), 1000);
-                      }
+                    const btn = document.querySelector(sel);
+                    if (!btn) return 'not_found';
+                    const style = window.getComputedStyle(btn);
+                    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+                      return 'hidden';
                     }
-                    tryClick(10);
+                    if (btn.disabled) return 'disabled';
+                    btn.click();
+                    return 'clicked';
                   },
                   args: [selector]
                 });
+
+                const result = results?.[0]?.result;
+                if (result === 'clicked') {
+                  clicked = true;
+
+                  // 3. Wait for success confirmation modal/toast to appear
+                  //    Poll up to 10 times (500ms apart = 5s max)
+                  let confirmed = false;
+                  for (let v = 0; v < 10; v++) {
+                    await new Promise(r => setTimeout(r, 500));
+
+                    try {
+                      const verifyResults = await chrome.scripting.executeScript({
+                        target: { tabId: tab.id },
+                        func: () => {
+                          // Superbuy: ant-modal with success text + Confirm button
+                          const modal = document.querySelector('.ant-modal-content');
+                          if (modal) {
+                            const modalText = modal.textContent || '';
+                            if (modalText.includes('successfully') || modalText.includes('成功')) {
+                              const confirmBtn = modal.querySelector('.ant-btn-primary, .ant-modal-footer button');
+                              if (confirmBtn) confirmBtn.click();
+                              return 'confirmed_modal';
+                            }
+                          }
+
+                          // KakoBuy/Sugargoo: success toast or message
+                          const successEl = document.querySelector(
+                            '.el-message--success, .ant-message-success, ' +
+                            '.ivu-message-success, .toast-success, ' +
+                            '.alert-dialog-title'
+                          );
+                          if (successEl) {
+                            const text = successEl.textContent.toLowerCase();
+                            if (text.includes('success') || text.includes('cart') || text.includes('成功')) {
+                              // Try to dismiss any confirm button nearby
+                              const dismiss = document.querySelector(
+                                '.ant-btn-primary, .el-button--primary, ' +
+                                '.ivu-btn-primary, button.confirm'
+                              );
+                              if (dismiss) dismiss.click();
+                              return 'confirmed_toast';
+                            }
+                          }
+
+                          // Generic: check if cart badge count went up
+                          const cartBadge = document.querySelector(
+                            '.cart-count, .badge, [class*="cart-num"], ' +
+                            '[class*="cartNum"], .shopping-cart .num, ' +
+                            '.el-badge__content'
+                          );
+                          if (cartBadge && parseInt(cartBadge.textContent) > 0) {
+                            return 'confirmed_badge';
+                          }
+
+                          return 'waiting';
+                        }
+                      });
+
+                      const verification = verifyResults?.[0]?.result || 'waiting';
+                      if (verification !== 'waiting') {
+                        confirmed = true;
+                        console.log(`[YuCart BG] Confirmed: ${verification}`);
+                        break;
+                      }
+                    } catch { /* tab may have navigated, keep trying */ }
+                  }
+
+                  // If still unconfirmed after polling, try one more click
+                  if (!confirmed) {
+                    try {
+                      await chrome.scripting.executeScript({
+                        target: { tabId: tab.id },
+                        func: (sel) => {
+                          const btn = document.querySelector(sel);
+                          if (btn && !btn.disabled) btn.click();
+                        },
+                        args: [selector]
+                      });
+                      await new Promise(r => setTimeout(r, 2000));
+                      // Check once more for the modal
+                      await chrome.scripting.executeScript({
+                        target: { tabId: tab.id },
+                        func: () => {
+                          const modal = document.querySelector('.ant-modal-content');
+                          if (modal) {
+                            const confirmBtn = modal.querySelector('.ant-btn-primary, .ant-modal-footer button');
+                            if (confirmBtn) confirmBtn.click();
+                          }
+                        }
+                      });
+                    } catch { /* ignore */ }
+                  }
+
+                  // 4. Close the tab — we're done with this product
+                  await new Promise(r => setTimeout(r, 500));
+                  try {
+                    await chrome.tabs.remove(tab.id);
+                  } catch { /* tab may already be closed */ }
+
+                  break;
+                }
+
+                // 'not_found' or 'hidden' — keep polling
+                if (result === 'disabled') {
+                  continue;
+                }
               } catch (scriptErr) {
-                console.warn('[YuCart BG] Auto-click script failed:', scriptErr.message);
+                console.warn(`[YuCart BG] Script attempt ${attempt + 1} failed:`, scriptErr.message);
               }
             }
-            sendResponse({ success: true, tabId: tab.id });
+
+            sendResponse({ success: true, tabId: tab.id, clicked });
           } catch (tabErr) {
             console.error('[YuCart BG] Failed to open tab:', tabErr);
             sendResponse({ success: false, error: tabErr.message });
