@@ -173,6 +173,7 @@ async function addToCart(item) {
       vendor: item.vendor || 'Unknown',
       thumbnail: item.thumbnail || '',
       url: item.url || '',
+      subtitle: item.subtitle || '',
       quantity: 1,
       addedAt: Date.now()
     });

@@ -204,6 +204,9 @@ function render() {
     // Bind events
     bindItemEvents();
 
+    // Init scrolling titles for overflowed text
+    initScrollingTitles();
+
     // Attach image error handlers (can't use inline onerror due to CSP)
     document.querySelectorAll('.cart-item__thumb').forEach(img => {
         img.addEventListener('error', () => {
@@ -237,7 +240,7 @@ function renderItem(item) {
       ${thumbHtml}
       <div class="cart-item__info">
         <div class="cart-item__title">
-          ${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" title="${escapeHtml(displayTitle)}">${escapeHtml(displayTitle)}</a>` : escapeHtml(displayTitle)}
+          <span class="cart-item__title-inner">${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" title="${escapeHtml(displayTitle)}">${escapeHtml(displayTitle)}</a>` : escapeHtml(displayTitle)}</span>
         </div>
         <div class="cart-item__price">
           ¥${item.price.toFixed(2)} × ${item.quantity}
@@ -245,7 +248,7 @@ function renderItem(item) {
         </div>
       </div>
       <div class="cart-item__controls">
-        <button class="qty-btn" data-action="decrement" data-id="${item.id}">−</button>
+        <button class="qty-btn" data-action="decrement" data-id="${item.id}" style="${item.quantity <= 1 ? 'display:none' : ''}">−</button>
         <span class="qty-value">${item.quantity}</span>
         <button class="qty-btn" data-action="increment" data-id="${item.id}">+</button>
         <button class="remove-btn" data-action="remove" data-id="${item.id}" title="Remove">
@@ -324,6 +327,14 @@ async function handleCleanAll() {
     // Track which IDs we're about to clean
     const cleaningIds = new Set(itemsToClean.map(i => i.id));
 
+    // Apply blur loading effect to items being cleaned
+    cleaningIds.forEach(id => {
+        const el = document.querySelector(`.cart-item[data-id="${id}"] .cart-item__title`);
+        if (el) {
+            el.classList.add('cart-item__title--loading');
+        }
+    });
+
     try {
         // Build JSON payload with cart info (include thumbnail for Gemini vision)
         const cartData = itemsToClean.map(item => ({
@@ -331,7 +342,8 @@ async function handleCleanAll() {
             name: item.title,
             link: item.url || '',
             vendor: item.vendor || '',
-            thumbnail: item.thumbnail || ''
+            thumbnail: item.thumbnail || '',
+            subtitle: item.subtitle || ''
         }));
 
         const results = await callAIBatch(cartData);
@@ -353,10 +365,16 @@ async function handleCleanAll() {
         cart = cartResp?.cart || [];
         render();
 
-        // Flash gold on freshly cleaned items
+        // Unblur freshly cleaned items
         cleaningIds.forEach(id => {
             const el = document.querySelector(`.cart-item[data-id="${id}"] .cart-item__title`);
-            if (el) el.classList.add('cart-item__title--flash');
+            if (el) {
+                el.classList.remove('cart-item__title--loading');
+                el.classList.add('cart-item__title--unblur');
+                el.addEventListener('animationend', () => {
+                    el.classList.remove('cart-item__title--unblur');
+                }, { once: true });
+            }
         });
 
         if (cleanedCount > 0) {
@@ -376,7 +394,7 @@ async function handleCleanAll() {
 
 function buildBatchPrompt(cartData) {
     const cartJson = JSON.stringify(cartData, null, 2);
-    return `Here are products from a Yupoo shopping cart:\n\n${cartJson}\n\nRules:\n- Clean each product name to a readable description (5 words max)\n- Remove all codes, model numbers, random characters, and seller jargon\n- Use the link and vendor as context clues for what the product is\n- If the name is just a code with no real product info, use the vendor name and guess the product type (e.g. "Nike Sneakers", "Designer Bag")\n- Never include codes or numbers in the cleaned name\n\nRespond with ONLY a JSON array, no markdown, no explanation:\n[{"id":"<same id>","cleaned_name":"<cleaned name>"}]`;
+    return `Here are products from a Yupoo shopping cart:\n\n${cartJson}\n\nRules:\n- Clean each product name to a readable description (5 words max)\n- Remove all codes, model numbers, random characters, and seller jargon\n- Use the link, vendor, and especially the subtitle (which often contains the real product source URL like Weidian or Taobao) as context clues for what the product is\n- If the name is just a code with no real product info, use the subtitle link, vendor name and guess the product type (e.g. "Nike Sneakers", "Designer Bag")\n- Never include codes or numbers in the cleaned name\n\nRespond with ONLY a JSON array, no markdown, no explanation:\n[{"id":"<same id>","cleaned_name":"<cleaned name>"}]`;
 }
 
 async function callAIBatch(cartData) {
@@ -548,7 +566,7 @@ async function callGeminiBatch(prompt, cartData) {
     // Add each item with its image
     for (const item of cartData) {
         parts.push({
-            text: `\n--- Product ---\nID: ${item.id}\nCurrent name: ${item.name}\nVendor: ${item.vendor}\nLink: ${item.link}`
+            text: `\n--- Product ---\nID: ${item.id}\nCurrent name: ${item.name}\nVendor: ${item.vendor}\nLink: ${item.link}${item.subtitle ? `\nSubtitle/Source: ${item.subtitle}` : ''}`
         });
 
         if (item.thumbnail) {
@@ -668,4 +686,33 @@ function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+}
+
+// ── Scrolling Overflow Titles ────────────────────────────────
+function initScrollingTitles() {
+    document.querySelectorAll('.cart-item__title').forEach(el => {
+        // Reset any previous scrolling
+        el.classList.remove('cart-item__title--scrolling');
+        const inner = el.querySelector('.cart-item__title-inner');
+        if (!inner) return;
+        inner.style.removeProperty('--scroll-distance');
+        inner.style.removeProperty('--scroll-duration');
+        inner.style.removeProperty('animation');
+
+        // Temporarily remove overflow hidden to measure true width
+        requestAnimationFrame(() => {
+            el.style.overflow = 'visible';
+            const innerWidth = inner.offsetWidth;
+            const containerWidth = el.clientWidth;
+            el.style.overflow = '';
+
+            const overflow = innerWidth - containerWidth;
+            if (overflow > 5) {
+                inner.style.setProperty('--scroll-distance', `-${overflow + 15}px`);
+                const duration = Math.min(8, Math.max(3, overflow / 15));
+                inner.style.setProperty('--scroll-duration', `${duration}s`);
+                el.classList.add('cart-item__title--scrolling');
+            }
+        });
+    });
 }

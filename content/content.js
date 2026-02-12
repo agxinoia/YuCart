@@ -26,11 +26,12 @@
     }
 
     // ── Price patterns ─────────────────────────────────────────
-    // Yupoo prices: "160Y", "160y", "160Yuan", "¥160", "￥160", "160元"
+    // Yupoo prices: "160Y", "160y", "160Yuan", "¥160", "￥160", "160元", "P160"
     const PRICE_REGEX = [
         /(\d[\d,.]*)\s*[Yy](?:uan)?(?:\s|$|[【\[\(]|[^\w])/,
         /[¥￥]\s*(\d[\d,.]*)/,
-        /(\d[\d,.]*)\s*[¥￥元]/
+        /(\d[\d,.]*)\s*[¥￥元]/,
+        /[Pp](\d[\d,.]*)(?:\s|$|[【\[\(]|[^\w])/
     ];
 
     let exchangeRate = null;
@@ -56,6 +57,29 @@
             }
         }
         return null;
+    }
+
+    // Extract the gallery subheading (e.g. Weidian/Taobao product link)
+    function getGallerySubtitle() {
+        const subtitleEl = document.querySelector('.showalbumheader__gallerysubtitle');
+        if (!subtitleEl) return '';
+        // The subtitle contains an <a> with a Yupoo redirect URL wrapping the real link
+        const anchor = subtitleEl.querySelector('a');
+        if (anchor) {
+            const href = anchor.getAttribute('href') || '';
+            // Unwrap Yupoo's redirect: https://x.yupoo.com/external?url=<encoded>
+            const urlMatch = href.match(/[?&]url=([^&]+)/);
+            if (urlMatch) {
+                try {
+                    return decodeURIComponent(decodeURIComponent(urlMatch[1]));
+                } catch {
+                    return decodeURIComponent(urlMatch[1]);
+                }
+            }
+            return href;
+        }
+        // Fallback to text content
+        return subtitleEl.textContent.trim();
     }
 
     function getCurrencySymbol(code) {
@@ -331,6 +355,9 @@
     // ══════════════════════════════════════════════════════════
     //  ALBUM DETAIL PAGE  (single product with images)
     // ══════════════════════════════════════════════════════════
+    // Cache detail page item data so the lightbox can reuse it
+    let detailPageItemData = null;
+
     function processDetailPage() {
         const titleEl = document.querySelector('.showalbumheader__gallerytitle, .showalbumheader__title');
         if (!titleEl) return;
@@ -345,6 +372,9 @@
         const headerImg = document.querySelector('.showalbumheader__gallerycover img');
         const thumbnail = getImageUrl(headerImg) || getImageUrl(galleryImg);
 
+        // Extract subheading (Weidian/Taobao product link)
+        const subtitle = getGallerySubtitle();
+
         // Clean title
         const cleanTitle = titleText.replace(/^\d[\d,.]*\s*[Yy](?:uan)?\s*/, '').trim() || titleText;
 
@@ -353,8 +383,12 @@
             price: price,
             vendor: getVendorName(),
             thumbnail: thumbnail,
-            url: window.location.href
+            url: window.location.href,
+            subtitle: subtitle
         };
+
+        // Cache for lightbox use
+        detailPageItemData = itemData;
 
         // Create a sticky add-to-cart bar at the top of the content
         const bar = document.createElement('div');
@@ -428,11 +462,60 @@
         });
     }
 
+    // ══════════════════════════════════════════════════════════
+    //  IMAGE VIEWER / LIGHTBOX (native Yupoo overlay)
+    // ══════════════════════════════════════════════════════════
+    function processImageViewer() {
+        const viewerMain = document.querySelector('.viewer__main');
+
+        // Note: Detail bar visibility is now handled by the global observers in init()
+
+        if (!viewerMain) return;
+        if (viewerMain.querySelector('.yucart-viewer-bar')) return; // already injected
+        if (!detailPageItemData) return; // need detail page context for price
+
+        const itemData = { ...detailPageItemData };
+
+        // Try to get the current viewer image as thumbnail
+        const viewerImg = viewerMain.querySelector('.viewer__img img, .viewer__imgwrap img');
+        if (viewerImg) {
+            const viewerThumb = getImageUrl(viewerImg);
+            if (viewerThumb) itemData.thumbnail = viewerThumb;
+        }
+
+        const bar = document.createElement('div');
+        bar.className = 'yucart-viewer-bar';
+
+        const convertedStr = formatConverted(itemData.price);
+        const priceDisplay = convertedStr ? `¥${itemData.price} ≈ ${convertedStr}` : `¥${itemData.price}`;
+
+        bar.innerHTML = `
+          <div class="yucart-detail-bar__info">
+            <span class="yucart-detail-bar__price">${priceDisplay}</span>
+            <span class="yucart-detail-bar__title">${(itemData.title || '').slice(0, 60)}</span>
+          </div>
+        `;
+
+        const btn = createCartButton(itemData, 'large');
+        bar.appendChild(btn);
+
+        // Insert the bar into the viewer — try the info sidebar first, else append to viewer
+        const infoWrap = viewerMain.querySelector('.viewer__infowrap');
+        if (infoWrap) {
+            infoWrap.style.position = 'relative';
+            infoWrap.style.paddingBottom = '60px';
+            infoWrap.appendChild(bar);
+        } else {
+            viewerMain.appendChild(bar);
+        }
+    }
+
     // ── Main scan ──────────────────────────────────────────────
     function scanPage() {
         processAlbumListings();
         processDetailPage();
         processIndexPage();
+        processImageViewer();
     }
 
     // ── Init ───────────────────────────────────────────────────
@@ -445,6 +528,59 @@
             requestAnimationFrame(scanPage);
         });
         observer.observe(document.body, { childList: true, subtree: true });
+
+        // ── Robust Lightbox Detection ──────────────────────────────
+        const handleLightboxChange = () => {
+            const detailBar = document.querySelector('.yucart-detail-bar');
+            if (!detailBar) return;
+
+            const htmlStyle = document.documentElement.style;
+            const isHtmlLocked = htmlStyle.overflow === 'hidden' && htmlStyle.position === 'fixed';
+
+            const viewerMain = document.querySelector('.viewer__main');
+            const isViewerVisible = viewerMain && window.getComputedStyle(viewerMain).display !== 'none';
+
+            if (isHtmlLocked || isViewerVisible) {
+                detailBar.style.setProperty('display', 'none', 'important');
+            } else {
+                detailBar.style.removeProperty('display');
+            }
+
+            // Also trigger processImageViewer to ensure the inner bar is injected if needed
+            if (isViewerVisible) processImageViewer();
+        };
+
+        // 1. Monitor <html> styles
+        const htmlObserver = new MutationObserver(handleLightboxChange);
+        htmlObserver.observe(document.documentElement, {
+            attributes: true,
+            attributeFilter: ['style', 'class']
+        });
+
+        // 2. Monitor .viewer__main visibility (attributes)
+        // We need to find .viewer__main first, it might be lazy loaded
+        const viewerObserver = new MutationObserver(handleLightboxChange);
+
+        // Helper to attach viewer observer
+        const connectViewerObserver = () => {
+            const viewerMain = document.querySelector('.viewer__main');
+            if (viewerMain) {
+                viewerObserver.observe(viewerMain, {
+                    attributes: true,
+                    attributeFilter: ['style', 'class', 'hidden']
+                });
+                return true;
+            }
+            return false;
+        };
+
+        // Attempt to connect immediately
+        if (!connectViewerObserver()) {
+            // If not found, check periodically or rely on the body observer to trigger scanPage which can retry
+            const checkInterval = setInterval(() => {
+                if (connectViewerObserver()) clearInterval(checkInterval);
+            }, 1000);
+        }
     }
 
     init();
