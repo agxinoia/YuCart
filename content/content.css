@@ -22,7 +22,9 @@
   z-index: 100;
 }
 
-*:hover>.yucart-album-overlay {
+.album__main:hover > .yucart-album-overlay,
+.album3__main:hover > .yucart-album-overlay,
+.showindex__children a:hover > .yucart-album-overlay {
   opacity: 1;
   transform: translateY(0);
   pointer-events: all;

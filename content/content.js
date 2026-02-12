@@ -10,21 +10,6 @@
     if (window.__yucart_loaded) return;
     window.__yucart_loaded = true;
 
-    // ── Apply dark mode immediately (before async load) to prevent flash ──
-    // Default to dark mode, will be corrected if user disabled it
-    if (document.body) {
-        document.body.classList.add('yucart-dark-mode');
-    } else {
-        // document_start: body doesn't exist yet, wait for it
-        const observer = new MutationObserver((mutations, obs) => {
-            if (document.body) {
-                document.body.classList.add('yucart-dark-mode');
-                obs.disconnect();
-            }
-        });
-        observer.observe(document.documentElement, { childList: true });
-    }
-
     // ── Price patterns ─────────────────────────────────────────
     // Yupoo prices: "160Y", "160y", "160Yuan", "¥160", "￥160", "160元", "P160"
     const PRICE_REGEX = [
@@ -36,6 +21,37 @@
 
     let exchangeRate = null;
     let targetCurrency = 'USD';
+    let darkModeEnabled = true;
+
+    // ── Cleanup when extension is reloaded ─────────────────────
+    let observer = null;
+    let htmlObserver = null;
+    let viewerObserver = null;
+    let viewerCheckInterval = null;
+    let scanDebounceTimer = null;
+    let lightboxDebounceTimer = null;
+    let pendingScanRoots = new Set();
+    let pendingFullRescan = false;
+    let settingsListenerAttached = false;
+
+    // ── Apply dark mode immediately (before async load) to prevent flash ──
+    // Default to dark mode, will be corrected if user disabled it.
+    if (document.body) {
+        if (darkModeEnabled) {
+            document.body.classList.add('yucart-dark-mode');
+        }
+    } else {
+        // document_start: body doesn't exist yet, wait for it
+        const initialBodyObserver = new MutationObserver((mutations, obs) => {
+            if (document.body) {
+                if (darkModeEnabled) {
+                    document.body.classList.add('yucart-dark-mode');
+                }
+                obs.disconnect();
+            }
+        });
+        initialBodyObserver.observe(document.documentElement, { childList: true });
+    }
 
     // ── Helpers ────────────────────────────────────────────────
     function getVendorName() {
@@ -105,10 +121,7 @@
             const resp = await chrome.runtime.sendMessage({ action: 'getSettings' });
             if (resp?.settings) {
                 targetCurrency = resp.settings.targetCurrency || 'USD';
-                // Apply dark mode setting - remove class if disabled
-                if (resp.settings.darkMode === false) {
-                    document.body.classList.remove('yucart-dark-mode');
-                }
+                applyDarkMode(resp.settings.darkMode !== false);
             }
 
             const rateResp = await chrome.runtime.sendMessage({ action: 'getRate', currency: targetCurrency });
@@ -126,15 +139,13 @@
 
     // ── Apply/remove dark mode ─────────────────────────────────
     function applyDarkMode(enabled) {
-        if (enabled) {
-            document.body.classList.add('yucart-dark-mode');
-        } else {
-            document.body.classList.remove('yucart-dark-mode');
-        }
+        darkModeEnabled = enabled !== false;
+        if (!document.body) return;
+        document.body.classList.toggle('yucart-dark-mode', darkModeEnabled);
     }
 
     // ── Listen for settings changes ────────────────────────────
-    chrome.storage.onChanged.addListener((changes, area) => {
+    function handleSettingsChange(changes, area) {
         try {
             if (area === 'sync' && changes.yucart_settings) {
                 const newSettings = changes.yucart_settings.newValue;
@@ -156,17 +167,28 @@
                 cleanup();
             }
         }
-    });
+    }
 
-    // ── Cleanup when extension is reloaded ─────────────────────
-    let observer = null;
+    chrome.storage.onChanged.addListener(handleSettingsChange);
+    settingsListenerAttached = true;
+
     function cleanup() {
-        if (observer) {
-            observer.disconnect();
-            observer = null;
+        if (observer) { observer.disconnect(); observer = null; }
+        if (htmlObserver) { htmlObserver.disconnect(); htmlObserver = null; }
+        if (viewerObserver) { viewerObserver.disconnect(); viewerObserver = null; }
+        if (viewerCheckInterval) { clearInterval(viewerCheckInterval); viewerCheckInterval = null; }
+        if (scanDebounceTimer) { clearTimeout(scanDebounceTimer); scanDebounceTimer = null; }
+        if (lightboxDebounceTimer) { clearTimeout(lightboxDebounceTimer); lightboxDebounceTimer = null; }
+        if (settingsListenerAttached) {
+            chrome.storage.onChanged.removeListener(handleSettingsChange);
+            settingsListenerAttached = false;
         }
+        pendingScanRoots.clear();
+        pendingFullRescan = false;
         // Remove dark mode class on cleanup to avoid orphaned styles
-        document.body.classList.remove('yucart-dark-mode');
+        if (document.body) {
+            document.body.classList.remove('yucart-dark-mode');
+        }
     }
 
     // ── Get real image URL (skip lazy-load placeholders) ───────
@@ -246,6 +268,7 @@
 
     // ── Toast ──────────────────────────────────────────────────
     function showToast(message) {
+        if (!document.body) return;
         const existing = document.querySelector('.yucart-toast');
         if (existing) existing.remove();
 
@@ -299,11 +322,25 @@
         return btn;
     }
 
+    function queryIncludingRoot(root, selector) {
+        if (!root) return [];
+        if (root === document || root.nodeType === Node.DOCUMENT_NODE) {
+            return Array.from(document.querySelectorAll(selector));
+        }
+        if (!(root instanceof Element)) return [];
+        const matches = [];
+        if (root.matches(selector)) {
+            matches.push(root);
+        }
+        matches.push(...root.querySelectorAll(selector));
+        return matches;
+    }
+
     // ══════════════════════════════════════════════════════════
     //  ALBUM LISTING PAGE  (grid of albums)
     // ══════════════════════════════════════════════════════════
-    function processAlbumListings() {
-        const albums = document.querySelectorAll('.album__main, .album3__main');
+    function processAlbumListings(root = document) {
+        const albums = queryIncludingRoot(root, '.album__main, .album3__main');
         if (!albums.length) return;
 
         albums.forEach(album => {
@@ -419,8 +456,8 @@
     // ══════════════════════════════════════════════════════════
     //  CATEGORY / INDEX PAGE  (showindex view)
     // ══════════════════════════════════════════════════════════
-    function processIndexPage() {
-        const items = document.querySelectorAll('.showindex__children a');
+    function processIndexPage(root = document) {
+        const items = queryIncludingRoot(root, '.showindex__children a');
         if (!items.length) return;
 
         items.forEach(item => {
@@ -518,40 +555,108 @@
         processImageViewer();
     }
 
+    function scanRoot(root) {
+        processAlbumListings(root);
+        processIndexPage(root);
+    }
+
+    function queueRootForScan(node) {
+        if (pendingFullRescan || !node) return;
+
+        if (node === document || node === document.documentElement || node === document.body) {
+            pendingFullRescan = true;
+            pendingScanRoots.clear();
+            return;
+        }
+
+        const root = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+        if (!root) return;
+
+        pendingScanRoots.add(root);
+        if (pendingScanRoots.size > 80) {
+            pendingFullRescan = true;
+            pendingScanRoots.clear();
+        }
+    }
+
+    function queueMutationTargets(mutations) {
+        for (const mutation of mutations) {
+            queueRootForScan(mutation.target);
+            for (const addedNode of mutation.addedNodes) {
+                queueRootForScan(addedNode);
+            }
+        }
+    }
+
+    function flushQueuedScans() {
+        scanDebounceTimer = null;
+
+        if (pendingFullRescan) {
+            pendingFullRescan = false;
+            pendingScanRoots.clear();
+            scanPage();
+            return;
+        }
+
+        const roots = Array.from(pendingScanRoots);
+        pendingScanRoots.clear();
+
+        for (const root of roots) {
+            if (root.isConnected) {
+                scanRoot(root);
+            }
+        }
+
+        // These rely on page-level state, so run once per queued batch.
+        processDetailPage();
+        processImageViewer();
+    }
+
+    function scheduleQueuedScan() {
+        if (scanDebounceTimer) clearTimeout(scanDebounceTimer);
+        scanDebounceTimer = setTimeout(flushQueuedScans, 250);
+    }
+
     // ── Init ───────────────────────────────────────────────────
     async function init() {
         await loadRate();
         scanPage();
 
         // Re-scan on dynamic content (Yupoo lazy loads)
-        observer = new MutationObserver(() => {
-            requestAnimationFrame(scanPage);
+        // Queue only changed roots and debounce processing.
+        observer = new MutationObserver((mutations) => {
+            queueMutationTargets(mutations);
+            scheduleQueuedScan();
         });
-        observer.observe(document.body, { childList: true, subtree: true });
+        observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
 
         // ── Robust Lightbox Detection ──────────────────────────────
         const handleLightboxChange = () => {
-            const detailBar = document.querySelector('.yucart-detail-bar');
-            if (!detailBar) return;
+            // Debounce to avoid expensive getComputedStyle on rapid mutations
+            if (lightboxDebounceTimer) clearTimeout(lightboxDebounceTimer);
+            lightboxDebounceTimer = setTimeout(() => {
+                const detailBar = document.querySelector('.yucart-detail-bar');
+                if (!detailBar) return;
 
-            const htmlStyle = document.documentElement.style;
-            const isHtmlLocked = htmlStyle.overflow === 'hidden' && htmlStyle.position === 'fixed';
+                const htmlStyle = document.documentElement.style;
+                const isHtmlLocked = htmlStyle.overflow === 'hidden' && htmlStyle.position === 'fixed';
 
-            const viewerMain = document.querySelector('.viewer__main');
-            const isViewerVisible = viewerMain && window.getComputedStyle(viewerMain).display !== 'none';
+                const viewerMain = document.querySelector('.viewer__main');
+                const isViewerVisible = viewerMain && window.getComputedStyle(viewerMain).display !== 'none';
 
-            if (isHtmlLocked || isViewerVisible) {
-                detailBar.style.setProperty('display', 'none', 'important');
-            } else {
-                detailBar.style.removeProperty('display');
-            }
+                if (isHtmlLocked || isViewerVisible) {
+                    detailBar.style.setProperty('display', 'none', 'important');
+                } else {
+                    detailBar.style.removeProperty('display');
+                }
 
-            // Also trigger processImageViewer to ensure the inner bar is injected if needed
-            if (isViewerVisible) processImageViewer();
+                // Also trigger processImageViewer to ensure the inner bar is injected if needed
+                if (isViewerVisible) processImageViewer();
+            }, 50);
         };
 
         // 1. Monitor <html> styles
-        const htmlObserver = new MutationObserver(handleLightboxChange);
+        htmlObserver = new MutationObserver(handleLightboxChange);
         htmlObserver.observe(document.documentElement, {
             attributes: true,
             attributeFilter: ['style', 'class']
@@ -559,7 +664,7 @@
 
         // 2. Monitor .viewer__main visibility (attributes)
         // We need to find .viewer__main first, it might be lazy loaded
-        const viewerObserver = new MutationObserver(handleLightboxChange);
+        viewerObserver = new MutationObserver(handleLightboxChange);
 
         // Helper to attach viewer observer
         const connectViewerObserver = () => {
@@ -576,9 +681,12 @@
 
         // Attempt to connect immediately
         if (!connectViewerObserver()) {
-            // If not found, check periodically or rely on the body observer to trigger scanPage which can retry
-            const checkInterval = setInterval(() => {
-                if (connectViewerObserver()) clearInterval(checkInterval);
+            // Poll until .viewer__main appears; interval is cleared on cleanup
+            viewerCheckInterval = setInterval(() => {
+                if (connectViewerObserver()) {
+                    clearInterval(viewerCheckInterval);
+                    viewerCheckInterval = null;
+                }
             }, 1000);
         }
     }

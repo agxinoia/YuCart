@@ -16,14 +16,15 @@ const DEFAULT_SETTINGS = {
 };
 
 // ── Update Checking ──────────────────────────────────────────
-const UPDATE_CHECK_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
-const VERSION_URL = 'https://raw.githubusercontent.com/YOUR_USERNAME/yucart/main/version.json';
-const CURRENT_VERSION = '1.3.0'; // Match manifest.json version
+const UPDATE_CHECK_ALARM = 'yucart_update_check';
+const UPDATE_CHECK_INTERVAL_MINUTES = 360; // 6 hours
+const VERSION_URL = 'https://raw.githubusercontent.com/agxinoia/YuCart/main/version.json';
 const UPDATE_STORAGE_KEY = 'yucart_update_info';
 
 // Check for updates by comparing against GitHub version file
 async function checkForUpdates() {
   try {
+    const currentVersion = chrome.runtime.getManifest().version;
     const response = await fetch(VERSION_URL);
     if (!response.ok) {
       console.log('[YuCart] Update check failed:', response.status);
@@ -32,7 +33,7 @@ async function checkForUpdates() {
 
     const data = await response.json();
 
-    if (compareVersions(data.version, CURRENT_VERSION) > 0) {
+    if (compareVersions(data.version, currentVersion) > 0) {
       // New version available
       const updateInfo = {
         updateAvailable: true,
@@ -77,13 +78,19 @@ function compareVersions(v1, v2) {
   return 0;
 }
 
-// Schedule the next update check
-function scheduleNextCheck() {
-  setTimeout(() => {
-    checkForUpdates();
-    scheduleNextCheck();
-  }, UPDATE_CHECK_INTERVAL);
+// Schedule periodic update checks using chrome.alarms (survives SW restarts)
+function scheduleUpdateAlarm() {
+  chrome.alarms.create(UPDATE_CHECK_ALARM, {
+    periodInMinutes: UPDATE_CHECK_INTERVAL_MINUTES
+  });
 }
+
+// Listen for alarm events
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === UPDATE_CHECK_ALARM) {
+    checkForUpdates();
+  }
+});
 
 // ── Fetch exchange rate ──────────────────────────────────────
 async function fetchExchangeRate(targetCurrency = 'USD') {
@@ -122,24 +129,51 @@ async function getExchangeRate(targetCurrency) {
 // extract base64 data. But photo.yupoo.com is cross-origin from
 // vendor.x.yupoo.com, so canvas gets tainted. We use DNR to add
 // CORS headers to the response, allowing canvas access.
+function buildImageCorsRule() {
+  return {
+    id: DNR_RULE_ID,
+    priority: 1,
+    action: {
+      type: 'modifyHeaders',
+      responseHeaders: [
+        { header: 'Access-Control-Allow-Origin', operation: 'set', value: '*' }
+      ]
+    },
+    condition: {
+      urlFilter: '||photo.yupoo.com',
+      resourceTypes: ['image', 'xmlhttprequest', 'other']
+    }
+  };
+}
+
+function normalizeDnrRule(rule) {
+  return {
+    id: rule.id,
+    priority: rule.priority,
+    action: rule.action,
+    condition: {
+      urlFilter: rule.condition?.urlFilter,
+      resourceTypes: [...(rule.condition?.resourceTypes || [])].sort()
+    }
+  };
+}
+
 async function updateImageRules() {
   try {
+    const desiredRule = buildImageCorsRule();
+    const dynamicRules = await chrome.declarativeNetRequest.getDynamicRules();
+    const existingRule = dynamicRules.find((rule) => rule.id === DNR_RULE_ID);
+
+    if (
+      existingRule &&
+      JSON.stringify(normalizeDnrRule(existingRule)) === JSON.stringify(normalizeDnrRule(desiredRule))
+    ) {
+      return;
+    }
+
     await chrome.declarativeNetRequest.updateDynamicRules({
       removeRuleIds: [DNR_RULE_ID],
-      addRules: [{
-        id: DNR_RULE_ID,
-        priority: 1,
-        action: {
-          type: 'modifyHeaders',
-          responseHeaders: [
-            { header: 'Access-Control-Allow-Origin', operation: 'set', value: '*' }
-          ]
-        },
-        condition: {
-          urlFilter: '||photo.yupoo.com',
-          resourceTypes: ['image', 'xmlhttprequest', 'other']
-        }
-      }]
+      addRules: [desiredRule]
     });
     console.log('[YuCart BG] ✅ DNR CORS rules set for photo.yupoo.com');
   } catch (e) {
@@ -209,6 +243,35 @@ async function updateItemTitle(itemId, cleanedTitle) {
   return cart;
 }
 
+async function updateItemTitlesBatch(updates = []) {
+  if (!Array.isArray(updates) || updates.length === 0) {
+    return await getCart();
+  }
+
+  const cart = await getCart();
+  const titlesById = new Map();
+  let hasUpdates = false;
+
+  for (const update of updates) {
+    const itemId = String(update?.itemId || '').trim();
+    const cleanedTitle = String(update?.cleanedTitle || '').trim();
+    if (!itemId || !cleanedTitle) continue;
+    titlesById.set(itemId, cleanedTitle);
+  }
+
+  for (const item of cart) {
+    const nextTitle = titlesById.get(item.id);
+    if (!nextTitle || item.cleanedTitle === nextTitle) continue;
+    item.cleanedTitle = nextTitle;
+    hasUpdates = true;
+  }
+
+  if (hasUpdates) {
+    await saveCart(cart);
+  }
+  return cart;
+}
+
 async function resetCleanedNames() {
   const cart = await getCart();
   for (const item of cart) {
@@ -242,6 +305,7 @@ chrome.runtime.onStartup?.addListener(async () => {
   updateBadge(cart);
   await updateImageRules();
   checkForUpdates();
+  scheduleUpdateAlarm();
 });
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -251,95 +315,105 @@ chrome.runtime.onInstalled.addListener(async () => {
   await fetchExchangeRate(settings.targetCurrency);
   await updateImageRules();
   checkForUpdates();
-  scheduleNextCheck();
+  scheduleUpdateAlarm();
 });
 
 // ── Message handler ──────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
-    switch (msg.action) {
-      case 'addToCart': {
-        const cart = await addToCart(msg.item);
-        sendResponse({ success: true, cart });
-        break;
+    try {
+      switch (msg.action) {
+        case 'addToCart': {
+          const cart = await addToCart(msg.item);
+          sendResponse({ success: true, cart });
+          break;
+        }
+        case 'getCart': {
+          const cart = await getCart();
+          sendResponse({ cart });
+          break;
+        }
+        case 'removeFromCart': {
+          const cart = await removeFromCart(msg.itemId);
+          sendResponse({ success: true, cart });
+          break;
+        }
+        case 'updateQuantity': {
+          const cart = await updateQuantity(msg.itemId, msg.quantity);
+          sendResponse({ success: true, cart });
+          break;
+        }
+        case 'updateItemTitle': {
+          const cart = await updateItemTitle(msg.itemId, msg.cleanedTitle);
+          sendResponse({ success: true, cart });
+          break;
+        }
+        case 'updateItemTitlesBatch': {
+          const cart = await updateItemTitlesBatch(msg.updates);
+          sendResponse({ success: true, cart });
+          break;
+        }
+        case 'resetCleanedNames': {
+          const cart = await resetCleanedNames();
+          sendResponse({ success: true, cart });
+          break;
+        }
+        case 'clearCart': {
+          const cart = await clearCart();
+          sendResponse({ success: true, cart });
+          break;
+        }
+        case 'getRate': {
+          const settings = await getSettings();
+          const target = msg.currency || settings.targetCurrency;
+          const rateData = await getExchangeRate(target);
+          sendResponse({ rateData });
+          break;
+        }
+        case 'refreshRate': {
+          const settings = await getSettings();
+          const target = msg.currency || settings.targetCurrency;
+          const rateData = await fetchExchangeRate(target);
+          sendResponse({ rateData });
+          break;
+        }
+        case 'getSettings': {
+          const settings = await getSettings();
+          sendResponse({ settings });
+          break;
+        }
+        case 'prepareImages': {
+          // Kept for compatibility with older popup builds.
+          await updateImageRules();
+          sendResponse({ success: true });
+          break;
+        }
+        case 'getUpdateInfo': {
+          const result = await chrome.storage.local.get(UPDATE_STORAGE_KEY);
+          const updateInfo = result[UPDATE_STORAGE_KEY] || { updateAvailable: false };
+          sendResponse({ updateInfo });
+          break;
+        }
+        case 'dismissUpdate': {
+          await chrome.storage.local.set({
+            [UPDATE_STORAGE_KEY]: {
+              updateAvailable: false,
+              dismissed: true,
+              dismissedAt: Date.now()
+            }
+          });
+          // Clear badge if cart is empty
+          const cart = await getCart();
+          updateBadge(cart);
+          sendResponse({ success: true });
+          break;
+        }
+        default:
+          sendResponse({ error: 'Unknown action' });
       }
-      case 'getCart': {
-        const cart = await getCart();
-        sendResponse({ cart });
-        break;
-      }
-      case 'removeFromCart': {
-        const cart = await removeFromCart(msg.itemId);
-        sendResponse({ success: true, cart });
-        break;
-      }
-      case 'updateQuantity': {
-        const cart = await updateQuantity(msg.itemId, msg.quantity);
-        sendResponse({ success: true, cart });
-        break;
-      }
-      case 'updateItemTitle': {
-        const cart = await updateItemTitle(msg.itemId, msg.cleanedTitle);
-        sendResponse({ success: true, cart });
-        break;
-      }
-      case 'resetCleanedNames': {
-        const cart = await resetCleanedNames();
-        sendResponse({ success: true, cart });
-        break;
-      }
-      case 'clearCart': {
-        const cart = await clearCart();
-        sendResponse({ success: true, cart });
-        break;
-      }
-      case 'getRate': {
-        const settings = await getSettings();
-        const target = msg.currency || settings.targetCurrency;
-        const rateData = await getExchangeRate(target);
-        sendResponse({ rateData });
-        break;
-      }
-      case 'refreshRate': {
-        const settings = await getSettings();
-        const target = msg.currency || settings.targetCurrency;
-        const rateData = await fetchExchangeRate(target);
-        sendResponse({ rateData });
-        break;
-      }
-      case 'getSettings': {
-        const settings = await getSettings();
-        sendResponse({ settings });
-        break;
-      }
-      case 'prepareImages': {
-        // Popup calls this before rendering to refresh DNR cookie rules
-        await updateImageRules();
-        sendResponse({ success: true });
-        break;
-      }
-      case 'getUpdateInfo': {
-        const result = await chrome.storage.local.get(UPDATE_STORAGE_KEY);
-        const updateInfo = result[UPDATE_STORAGE_KEY] || { updateAvailable: false };
-        sendResponse({ updateInfo });
-        break;
-      }
-      case 'dismissUpdate': {
-        await chrome.storage.local.set({
-          [UPDATE_STORAGE_KEY]: {
-            updateAvailable: false,
-            dismissed: true,
-            dismissedAt: Date.now()
-          }
-        });
-        // Clear badge if cart is empty
-        const cart = await getCart();
-        updateBadge(cart);
-        sendResponse({ success: true });
-        break;
-      }
-      default:
-        sendResponse({ error: 'Unknown action' });
+    } catch (error) {
+      console.error('[YuCart BG] Message handler failed:', error);
+      sendResponse({ error: error?.message || 'Unexpected background error' });
     }
   })();
   return true; // keep channel open for async

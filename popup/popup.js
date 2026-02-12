@@ -10,6 +10,9 @@ let settings = {};
 let rateData = null;
 let aiProvider = 'openai';
 let aiApiKey = '';
+const GEMINI_MAX_ITEMS_PER_BATCH = 20;
+const GEMINI_MAX_IMAGE_DIMENSION = 320;
+const GEMINI_IMAGE_QUALITY = 0.72;
 
 const CURRENCY_SYMBOLS = {
     USD: '$', EUR: '€', GBP: '£', AUD: 'A$', CAD: 'C$',
@@ -46,9 +49,6 @@ async function init() {
     const rateResp = await chrome.runtime.sendMessage({ action: 'getRate', currency: settings.targetCurrency });
     rateData = rateResp?.rateData || null;
     updateRateBar();
-
-    // Refresh DNR rules (injects cookies for image loading)
-    await chrome.runtime.sendMessage({ action: 'prepareImages' });
 
     // Load cart
     const cartResp = await chrome.runtime.sendMessage({ action: 'getCart' });
@@ -318,6 +318,12 @@ async function handleCleanAll() {
         return;
     }
 
+    let batchItems = itemsToClean;
+    if (aiProvider === 'gemini' && itemsToClean.length > GEMINI_MAX_ITEMS_PER_BATCH) {
+        batchItems = itemsToClean.slice(0, GEMINI_MAX_ITEMS_PER_BATCH);
+        showToast(`Gemini batch limit: cleaning first ${GEMINI_MAX_ITEMS_PER_BATCH} items`);
+    }
+
     const cleanAllBtn = document.getElementById('cleanAllBtn');
     const loadingBar = document.getElementById('aiLoadingBar');
     cleanAllBtn.classList.add('btn--star--loading');
@@ -325,7 +331,7 @@ async function handleCleanAll() {
     loadingBar.classList.add('ai-loading-bar--active');
 
     // Track which IDs we're about to clean
-    const cleaningIds = new Set(itemsToClean.map(i => i.id));
+    const cleaningIds = new Set(batchItems.map(i => i.id));
 
     // Apply blur loading effect to items being cleaned
     cleaningIds.forEach(id => {
@@ -337,7 +343,7 @@ async function handleCleanAll() {
 
     try {
         // Build JSON payload with cart info (include thumbnail for Gemini vision)
-        const cartData = itemsToClean.map(item => ({
+        const cartData = batchItems.map(item => ({
             id: item.id,
             name: item.title,
             link: item.url || '',
@@ -348,21 +354,30 @@ async function handleCleanAll() {
 
         const results = await callAIBatch(cartData);
 
-        let cleanedCount = 0;
+        const updates = [];
         for (const result of results) {
             if (result.id && result.cleaned_name) {
-                await chrome.runtime.sendMessage({
-                    action: 'updateItemTitle',
+                updates.push({
                     itemId: result.id,
                     cleanedTitle: result.cleaned_name
                 });
-                cleanedCount++;
             }
         }
 
-        // Refresh cart and re-render
-        const cartResp = await chrome.runtime.sendMessage({ action: 'getCart' });
-        cart = cartResp?.cart || [];
+        // Persist all updates in one background message.
+        let cleanedCount = 0;
+        if (updates.length > 0) {
+            const updateResp = await chrome.runtime.sendMessage({
+                action: 'updateItemTitlesBatch',
+                updates
+            });
+            cart = updateResp?.cart || [];
+            cleanedCount = updates.length;
+        } else {
+            const cartResp = await chrome.runtime.sendMessage({ action: 'getCart' });
+            cart = cartResp?.cart || [];
+        }
+
         render();
 
         // Unblur freshly cleaned items
@@ -533,20 +548,67 @@ async function callOpenRouterBatch(prompt, cartData) {
     return parseAIJsonResponse(text);
 }
 
+function parseDataUrl(dataUrl) {
+    const match = /^data:(.*?);base64,(.*)$/.exec(dataUrl || '');
+    if (!match) return null;
+    return { mimeType: match[1] || 'image/jpeg', base64: match[2] || '' };
+}
+
+async function blobToCompressedBase64(blob) {
+    try {
+        const bitmap = await createImageBitmap(blob);
+        const maxEdge = GEMINI_MAX_IMAGE_DIMENSION;
+        let width = bitmap.width;
+        let height = bitmap.height;
+
+        if (width > maxEdge || height > maxEdge) {
+            if (width >= height) {
+                height = Math.max(1, Math.round((height * maxEdge) / width));
+                width = maxEdge;
+            } else {
+                width = Math.max(1, Math.round((width * maxEdge) / height));
+                height = maxEdge;
+            }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d', { alpha: false });
+        if (!ctx) {
+            bitmap.close();
+            return null;
+        }
+
+        ctx.drawImage(bitmap, 0, 0, width, height);
+        bitmap.close();
+
+        const dataUrl = canvas.toDataURL('image/jpeg', GEMINI_IMAGE_QUALITY);
+        return parseDataUrl(dataUrl);
+    } catch {
+        return null;
+    }
+}
+
 async function fetchImageAsBase64(url) {
     try {
+        if (!url) return null;
+
+        if (url.startsWith('data:')) {
+            return parseDataUrl(url);
+        }
+
         const resp = await fetch(url);
         if (!resp.ok) return null;
         const blob = await resp.blob();
-        return new Promise((resolve) => {
+
+        const compressed = await blobToCompressedBase64(blob);
+        if (compressed) return compressed;
+
+        return await new Promise((resolve) => {
             const reader = new FileReader();
-            reader.onloadend = () => {
-                const dataUrl = reader.result;
-                // Extract base64 after "data:image/...;base64,"
-                const base64 = dataUrl.split(',')[1];
-                const mimeType = dataUrl.match(/data:(.*?);/)?.[1] || 'image/jpeg';
-                resolve({ base64, mimeType });
-            };
+            reader.onloadend = () => resolve(parseDataUrl(reader.result));
             reader.onerror = () => resolve(null);
             reader.readAsDataURL(blob);
         });
@@ -556,6 +618,8 @@ async function fetchImageAsBase64(url) {
 }
 
 async function callGeminiBatch(prompt, cartData) {
+    const limitedCartData = cartData.slice(0, GEMINI_MAX_ITEMS_PER_BATCH);
+
     // Build multimodal parts: text prompt + product images
     const parts = [];
 
@@ -564,7 +628,7 @@ async function callGeminiBatch(prompt, cartData) {
     });
 
     // Add each item with its image
-    for (const item of cartData) {
+    for (const item of limitedCartData) {
         parts.push({
             text: `\n--- Product ---\nID: ${item.id}\nCurrent name: ${item.name}\nVendor: ${item.vendor}\nLink: ${item.link}${item.subtitle ? `\nSubtitle/Source: ${item.subtitle}` : ''}`
         });
@@ -682,37 +746,50 @@ function showToast(message) {
 }
 
 // ── Helpers ──────────────────────────────────────────────────
+const _escapeMap = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const _escapeRe = /[&<>"']/g;
+
 function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+    if (!str) return '';
+    return String(str).replace(_escapeRe, c => _escapeMap[c]);
 }
 
 // ── Scrolling Overflow Titles ────────────────────────────────
 function initScrollingTitles() {
-    document.querySelectorAll('.cart-item__title').forEach(el => {
-        // Reset any previous scrolling
+    const elements = document.querySelectorAll('.cart-item__title');
+    const pairs = []; // collect el + inner pairs for batched processing
+
+    elements.forEach(el => {
         el.classList.remove('cart-item__title--scrolling');
         const inner = el.querySelector('.cart-item__title-inner');
         if (!inner) return;
         inner.style.removeProperty('--scroll-distance');
         inner.style.removeProperty('--scroll-duration');
         inner.style.removeProperty('animation');
+        pairs.push({ el, inner });
+    });
 
-        // Temporarily remove overflow hidden to measure true width
+    if (!pairs.length) return;
+
+    // Batch write: set all to visible in one pass
+    requestAnimationFrame(() => {
+        pairs.forEach(({ el }) => { el.style.overflow = 'visible'; });
+
+        // Batch read + write in next frame to avoid layout thrashing
         requestAnimationFrame(() => {
-            el.style.overflow = 'visible';
-            const innerWidth = inner.offsetWidth;
-            const containerWidth = el.clientWidth;
-            el.style.overflow = '';
+            pairs.forEach(({ el, inner }) => {
+                const innerWidth = inner.offsetWidth;
+                const containerWidth = el.clientWidth;
+                el.style.overflow = '';
 
-            const overflow = innerWidth - containerWidth;
-            if (overflow > 5) {
-                inner.style.setProperty('--scroll-distance', `-${overflow + 15}px`);
-                const duration = Math.min(8, Math.max(3, overflow / 15));
-                inner.style.setProperty('--scroll-duration', `${duration}s`);
-                el.classList.add('cart-item__title--scrolling');
-            }
+                const overflow = innerWidth - containerWidth;
+                if (overflow > 5) {
+                    inner.style.setProperty('--scroll-distance', `-${overflow + 15}px`);
+                    const duration = Math.min(8, Math.max(3, overflow / 15));
+                    inner.style.setProperty('--scroll-duration', `${duration}s`);
+                    el.classList.add('cart-item__title--scrolling');
+                }
+            });
         });
     });
 }
