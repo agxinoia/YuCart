@@ -476,6 +476,13 @@ body::-webkit-scrollbar-thumb {
     color: var(--teal);
 }
 
+.cart-item__details-price {
+    font-size: 11px;
+    color: var(--teal);
+    margin-top: 2px;
+    font-weight: 500;
+}
+
 .cart-item__price {
     font-size: 11px;
     color: var(--text-secondary);
@@ -799,8 +806,13 @@ body::-webkit-scrollbar-thumb {
 }
 
 @keyframes splashFadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
 }
 
 .checkout-splash__content {
@@ -822,7 +834,9 @@ body::-webkit-scrollbar-thumb {
 }
 
 @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .checkout-splash__title {

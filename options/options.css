@@ -173,6 +173,24 @@ body {
     color: var(--text-muted);
 }
 
+/* ── Google Calendar Sync ────────────────────────────────────── */
+.gcal-sync {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    margin-top: 12px;
+}
+
+.gcal-sync__status {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
 /* ── Rate Display ────────────────────────────────────────────── */
 .rate-display {
     display: flex;

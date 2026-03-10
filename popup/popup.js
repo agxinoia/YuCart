@@ -82,6 +82,17 @@ async function init() {
     if (resetNamesBtn) {
         resetNamesBtn.addEventListener('click', handleResetNames);
     }
+
+    // Wardrobe link
+    const wardrobeLink = document.getElementById('wardrobeLink');
+    if (wardrobeLink && settings.betaWardrobeEnabled === true) {
+        wardrobeLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            chrome.tabs.create({ url: chrome.runtime.getURL('wardrobe/wardrobe.html') });
+        });
+    } else if (wardrobeLink) {
+        wardrobeLink.style.display = 'none';
+    }
 }
 
 // ── Rate Bar ─────────────────────────────────────────────────
@@ -241,6 +252,28 @@ function renderItem(item) {
     const isCleaned = item.cleanedTitle && item.cleanedTitle !== item.title;
     const displayTitle = isCleaned ? item.cleanedTitle : item.title;
 
+    // Build the details/price line based on whether item is cleaned
+    let detailsLine = '';
+    if (isCleaned && (item.color || item.itemType)) {
+        // For cleaned items: show "Color · Type - $price" format
+        const parts = [];
+        if (item.color) parts.push(item.color);
+        if (item.itemType) parts.push(item.itemType);
+        const details = parts.join(' · ');
+        const priceDisplay = convertedStr || `¥${(item.price * item.quantity).toFixed(2)}`;
+        detailsLine = `<div class="cart-item__details-price">${details} - ${priceDisplay}</div>`;
+    } else if (isCleaned) {
+        // Cleaned but no color/type: just show price
+        const priceDisplay = convertedStr || `¥${(item.price * item.quantity).toFixed(2)}`;
+        detailsLine = `<div class="cart-item__details-price">${priceDisplay}</div>`;
+    } else {
+        // For non-cleaned items: show traditional price line
+        detailsLine = `<div class="cart-item__price">
+          ¥${item.price.toFixed(2)} × ${item.quantity}
+          ${convertedStr ? `<span class="cart-item__price-converted">${convertedStr}</span>` : ''}
+        </div>`;
+    }
+
     return `
     <div class="cart-item" data-id="${item.id}">
       ${thumbHtml}
@@ -248,10 +281,7 @@ function renderItem(item) {
         <div class="cart-item__title">
           <span class="cart-item__title-inner">${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" title="${escapeHtml(displayTitle)}">${escapeHtml(displayTitle)}</a>` : escapeHtml(displayTitle)}</span>
         </div>
-        <div class="cart-item__price">
-          ¥${item.price.toFixed(2)} × ${item.quantity}
-          ${convertedStr ? `<span class="cart-item__price-converted">${convertedStr}</span>` : ''}
-        </div>
+        ${detailsLine}
       </div>
       <div class="cart-item__controls">
         <button class="qty-btn" data-action="decrement" data-id="${item.id}" style="${item.quantity <= 1 ? 'display:none' : ''}">−</button>
@@ -365,7 +395,9 @@ async function handleCleanAll() {
             if (result.id && result.cleaned_name) {
                 updates.push({
                     itemId: result.id,
-                    cleanedTitle: result.cleaned_name
+                    cleanedTitle: result.cleaned_name,
+                    itemType: result.item_type || null,
+                    color: result.color || null
                 });
             }
         }
@@ -415,7 +447,7 @@ async function handleCleanAll() {
 
 function buildBatchPrompt(cartData) {
     const cartJson = JSON.stringify(cartData, null, 2);
-    return `Here are products from a Yupoo shopping cart:\n\n${cartJson}\n\nRules:\n- Clean each product name to a readable description (5 words max)\n- Remove all codes, model numbers, random characters, and seller jargon\n- Use the link, vendor, and especially the subtitle (which often contains the real product source URL like Weidian or Taobao) as context clues for what the product is\n- If the name is just a code with no real product info, use the subtitle link, vendor name and guess the product type (e.g. "Nike Sneakers", "Designer Bag")\n- Never include codes or numbers in the cleaned name\n\nRespond with ONLY a JSON array, no markdown, no explanation:\n[{"id":"<same id>","cleaned_name":"<cleaned name>"}]`;
+    return `Here are products from a Yupoo shopping cart. These are streetwear and fashion items from Chinese resellers.\n\n${cartJson}\n\nRules:\n- Clean each product name to a readable description (5 words max)\n- Remove all codes, model numbers, random characters, and seller jargon\n- ALWAYS identify and include the brand name (e.g. Nike, Adidas, Supreme, Jordan, Stussy, The North Face, etc.)\n- Vendors often use abbreviations for brand/product names. Common examples: BPM = Broken Planet Market, TNF = The North Face, NK = Nike, AJ = Air Jordan, NB = New Balance, FOG = Fear of God, CP = Casablanca Paris. Decode these abbreviations into full brand names\n- Use the link, vendor, and especially the subtitle (which often contains the real product source URL like Weidian or Taobao) as context clues for what the product is\n- If the name is just a code with no real product info, use the subtitle link, vendor name and guess the product type (e.g. "Nike Sneakers", "Designer Bag")\n- Never include codes or numbers in the cleaned name\n- Format: "[Brand] [Product Type]" e.g. "Nike Dunk Low Sneakers", "Supreme Box Logo Hoodie"\n- Identify the item type (e.g. "Sneakers", "Hoodie", "T-Shirt", "Pants", "Jacket", "Shorts", "Cap", "Bag", "Socks", "Sweater", "Coat", "Jeans", "Shirt", "Dress", "Skirt", "Belt", "Watch", "Glasses", "Scarf", "Gloves")\n- Identify the primary color if visible/mentioned (e.g. "Black", "White", "Red", "Blue", "Green", "Yellow", "Orange", "Purple", "Pink", "Brown", "Grey", "Beige", "Navy", "Multi-color"). If unknown, use null.\n\nRespond with ONLY a JSON array, no markdown, no explanation:\n[{"id":"<same id>","cleaned_name":"<cleaned name>","item_type":"<item type>","color":"<color or null>"}]`;
 }
 
 async function callAIBatch(cartData) {
@@ -449,7 +481,27 @@ function parseAIJsonResponse(text) {
             if (depth === 0) { end = i + 1; break; }
         }
     }
-    if (end === -1) throw new Error('Malformed JSON array in AI response');
+    if (end === -1) {
+        // Response was truncated — try to salvage complete items
+        // Find the last complete object by looking for the last "},"  or "}"
+        const partial = text.substring(start);
+        const lastCompleteObj = partial.lastIndexOf('}');
+        if (lastCompleteObj === -1) throw new Error('Malformed JSON array in AI response');
+        const salvaged = partial.substring(0, lastCompleteObj + 1) + ']';
+        try {
+            const parsed = JSON.parse(salvaged);
+            if (Array.isArray(parsed)) {
+                console.warn('[YuCart] AI response was truncated, salvaged', parsed.length, 'items');
+                return parsed.map(item => ({
+                    id: String(item.id || ''),
+                    cleaned_name: String(item.cleaned_name || '').replace(/[<>"'&]/g, '').trim(),
+                    item_type: item.item_type ? String(item.item_type).replace(/[<>"'&]/g, '').trim() : null,
+                    color: item.color ? String(item.color).replace(/[<>"'&]/g, '').trim() : null
+                })).filter(item => item.id && item.cleaned_name);
+            }
+        } catch { /* fall through */ }
+        throw new Error('Malformed JSON array in AI response');
+    }
 
     const jsonStr = text.substring(start, end);
 
@@ -459,7 +511,9 @@ function parseAIJsonResponse(text) {
         // Sanitize each result - ensure cleaned_name is a plain string, max 5 words
         return parsed.map(item => ({
             id: String(item.id || ''),
-            cleaned_name: String(item.cleaned_name || '').replace(/[<>"'&]/g, '').trim()
+            cleaned_name: String(item.cleaned_name || '').replace(/[<>"'&]/g, '').trim(),
+            item_type: item.item_type ? String(item.item_type).replace(/[<>"'&]/g, '').trim() : null,
+            color: item.color ? String(item.color).replace(/[<>"'&]/g, '').trim() : null
         })).filter(item => item.id && item.cleaned_name);
     } catch (e) {
         // Try to fix common JSON issues: trailing commas, single quotes
@@ -470,7 +524,9 @@ function parseAIJsonResponse(text) {
         if (!Array.isArray(parsed)) throw new Error('Response is not an array');
         return parsed.map(item => ({
             id: String(item.id || ''),
-            cleaned_name: String(item.cleaned_name || '').replace(/[<>"'&]/g, '').trim()
+            cleaned_name: String(item.cleaned_name || '').replace(/[<>"'&]/g, '').trim(),
+            item_type: item.item_type ? String(item.item_type).replace(/[<>"'&]/g, '').trim() : null,
+            color: item.color ? String(item.color).replace(/[<>"'&]/g, '').trim() : null
         })).filter(item => item.id && item.cleaned_name);
     }
 }
@@ -485,7 +541,7 @@ async function callOpenAIBatch(prompt, cartData) {
         body: JSON.stringify({
             model: 'gpt-3.5-turbo',
             messages: [
-                { role: 'system', content: 'You clean up messy e-commerce product names. You always respond with valid JSON only.' },
+                { role: 'system', content: 'You clean up messy streetwear and fashion product names from Chinese resellers. Always identify the brand name. Decode common abbreviations (BPM = Broken Planet Market, TNF = The North Face, NK = Nike, AJ = Air Jordan, FOG = Fear of God, etc.). You always respond with valid JSON only.' },
                 { role: 'user', content: prompt }
             ],
             max_tokens: 2000,
@@ -516,7 +572,7 @@ async function callOpenRouterBatch(prompt, cartData) {
         body: JSON.stringify({
             model: 'z-ai/glm-4.5-air:free',
             messages: [
-                { role: 'system', content: 'You clean up messy e-commerce product names. You always respond with valid JSON only. No thinking, no explanation.' },
+                { role: 'system', content: 'You clean up messy streetwear and fashion product names from Chinese resellers. Always identify the brand name. Decode common abbreviations (BPM = Broken Planet Market, TNF = The North Face, NK = Nike, AJ = Air Jordan, FOG = Fear of God, etc.). You always respond with valid JSON only. No thinking, no explanation.' },
                 { role: 'user', content: prompt }
             ],
             max_tokens: 2000,
@@ -630,7 +686,7 @@ async function callGeminiBatch(prompt, cartData) {
     const parts = [];
 
     parts.push({
-        text: `You are identifying products from a Yupoo shopping cart. I will show you each product's current name, link, vendor, and its image.\n\nFor each product, figure out what it actually is by looking at the image and context. Give it a clean, readable name (5 words max). Remove all codes, model numbers, and random characters. Never include codes or numbers in the cleaned name.\n\nRespond with ONLY a JSON array, no markdown fences, no explanation:\n[{"id":"<same id>","cleaned_name":"<cleaned name>"}]`
+        text: `You are identifying streetwear and fashion products from a Yupoo shopping cart. I will show you each product's current name, link, vendor, and its image.\n\nFor each product, figure out what it actually is by looking at the image and context. Give it a clean, readable name (5 words max). Remove all codes, model numbers, and random characters. Never include codes or numbers in the cleaned name.\n\nIMPORTANT:\n- ALWAYS identify and include the brand name (e.g. Nike, Adidas, Supreme, Jordan, Stussy, The North Face, etc.)\n- Vendors often use abbreviations for brand/product names. Common examples: BPM = Broken Planet Market, TNF = The North Face, NK = Nike, AJ = Air Jordan, NB = New Balance, FOG = Fear of God, CP = Casablanca Paris. Decode these into full brand names\n- Format: "[Brand] [Product Type]" e.g. "Nike Dunk Low Sneakers", "Supreme Box Logo Hoodie"\n- Identify the item type (e.g. "Sneakers", "Hoodie", "T-Shirt", "Pants", "Jacket", "Shorts", "Cap", "Bag", "Socks", "Sweater", "Coat", "Jeans", "Shirt", "Dress", "Skirt", "Belt", "Watch", "Glasses", "Scarf", "Gloves")\n- Identify the primary color from the image (e.g. "Black", "White", "Red", "Blue", "Green", "Yellow", "Orange", "Purple", "Pink", "Brown", "Grey", "Beige", "Navy", "Multi-color"). If unknown, use null.\n\nRespond with ONLY a JSON array, no markdown fences, no explanation:\n[{"id":"<same id>","cleaned_name":"<cleaned name>","item_type":"<item type>","color":"<color or null>"}]`
     });
 
     // Add each item with its image
@@ -652,7 +708,7 @@ async function callGeminiBatch(prompt, cartData) {
         }
     }
 
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${aiApiKey}`, {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${aiApiKey}`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
@@ -660,7 +716,7 @@ async function callGeminiBatch(prompt, cartData) {
         body: JSON.stringify({
             contents: [{ parts }],
             generationConfig: {
-                maxOutputTokens: 2000,
+                maxOutputTokens: 4096,
                 temperature: 0.1
             }
         })
@@ -712,6 +768,13 @@ async function handleExport() {
             vendorTotal += lineTotal;
             const displayTitle = item.cleanedTitle || item.title;
             text += `  • ${displayTitle}\n`;
+            // Add color and type details if available
+            if (item.color || item.itemType) {
+                const details = [];
+                if (item.color) details.push(item.color);
+                if (item.itemType) details.push(item.itemType);
+                text += `    [${details.join(' · ')}]\n`;
+            }
             text += `    ¥${item.price.toFixed(2)} × ${item.quantity} = ¥${lineTotal.toFixed(2)}`;
             const conv = formatConverted(lineTotal);
             if (conv) text += ` ${conv}`;

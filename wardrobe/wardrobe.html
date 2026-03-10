@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YuCart Wardrobe</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="wardrobe.css">
+</head>
+
+<body>
+    <!-- Grain overlay -->
+    <div class="grain"></div>
+
+    <!-- Ambient orbs -->
+    <div class="ambient-orb ambient-orb--1"></div>
+    <div class="ambient-orb ambient-orb--2"></div>
+
+    <div class="shell">
+        <!-- ── Sidebar / Context Rail ── -->
+        <aside class="rail">
+            <div class="rail__inner">
+                <!-- Brand -->
+                <div class="rail__brand">
+                    <div class="brand-mark">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M3 2l7 10l-7 10"></path>
+                            <path d="M21 2l-7 10l7 10"></path>
+                            <line x1="12" y1="2" x2="12" y2="6"></line>
+                        </svg>
+                    </div>
+                    <div class="brand-text">
+                        <span class="brand-text__title">Wardrobe</span>
+                        <span class="brand-text__count"><span id="itemCount">0</span> pieces</span>
+                    </div>
+                    <button class="rail__action" id="clearWardrobeBtn" title="Clear wardrobe" style="display:none;">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        </svg>
+                    </button>
+                </div>
+
+                <!-- Calendar Strip -->
+                <div class="rail__section">
+                    <div class="rail__section-label">Schedule</div>
+                    <div class="calendar-strip">
+                        <button class="cal-nav" id="calPrev" aria-label="Previous week">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="15 18 9 12 15 6"></polyline>
+                            </svg>
+                        </button>
+                        <div class="cal-days" id="calendarDays"></div>
+                        <button class="cal-nav" id="calNext" aria-label="Next week">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="9 18 15 12 9 6"></polyline>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Context Chips -->
+                <div class="rail__section">
+                    <div class="rail__section-label">Context</div>
+                    <div class="context-stack">
+                        <div class="context-chip" id="weatherCard">
+                            <div class="context-chip__icon">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                                    <circle cx="12" cy="10" r="3"></circle>
+                                </svg>
+                            </div>
+                            <span class="context-chip__text" id="locationText">Enable location</span>
+                            <button class="context-chip__action" id="locationBtn">Allow</button>
+                        </div>
+                        <div class="context-chip" id="gcalCard">
+                            <div class="context-chip__icon context-chip__icon--cal">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                                    <line x1="16" y1="2" x2="16" y2="6"></line>
+                                    <line x1="8" y1="2" x2="8" y2="6"></line>
+                                    <line x1="3" y1="10" x2="21" y2="10"></line>
+                                </svg>
+                            </div>
+                            <span class="context-chip__text" id="gcalStatus">Calendar</span>
+                        </div>
+                    </div>
+                    <!-- Calendar events -->
+                    <div class="events-list" id="gcalEvents" style="display:none;"></div>
+                </div>
+
+                <!-- Generate CTA -->
+                <div class="rail__section rail__section--cta">
+                    <button class="generate-btn" id="generateBtn" disabled>
+                        <div class="generate-btn__inner">
+                            <svg class="generate-btn__icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polygon
+                                    points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2">
+                                </polygon>
+                            </svg>
+                            <span id="generateBtnText">Generate Outfit</span>
+                        </div>
+                        <div class="generate-btn__shimmer"></div>
+                    </button>
+                    <div class="loading-track" id="aiLoadingBar">
+                        <div class="loading-track__fill"></div>
+                    </div>
+                    <p class="generate-hint">AI styles your wardrobe for the day</p>
+                </div>
+            </div>
+        </aside>
+
+        <!-- ── Main Stage ── -->
+        <main class="stage">
+            <!-- View Switcher -->
+            <div class="view-switcher" id="viewSwitcher">
+                <button class="view-switcher__tab view-switcher__tab--active" data-view="wardrobe">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="3" width="7" height="7"></rect>
+                        <rect x="14" y="3" width="7" height="7"></rect>
+                        <rect x="3" y="14" width="7" height="7"></rect>
+                        <rect x="14" y="14" width="7" height="7"></rect>
+                    </svg>
+                    <span>Your Pieces</span>
+                    <span class="view-switcher__count" id="wardrobeCount"></span>
+                </button>
+                <button class="view-switcher__tab" data-view="outfits" id="outfitsTab">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+                    </svg>
+                    <span>AI Outfits</span>
+                    <span class="view-switcher__badge" id="outfitBadge" style="display:none;">0</span>
+                </button>
+                <div class="view-switcher__slider" id="viewSlider"></div>
+            </div>
+
+            <!-- AI Outfits -->
+            <section id="outfitSection" style="display:none;">
+                <div class="outfit-list" id="outfitList"></div>
+                <div class="empty-state" id="outfitEmpty" style="display:none;">
+                    <div class="empty-state__visual">
+                        <div class="empty-state__ring"></div>
+                        <svg class="empty-state__icon" width="36" height="36" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+                            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+                        </svg>
+                    </div>
+                    <h3 class="empty-state__title">No outfits yet</h3>
+                    <p class="empty-state__desc">Pick a date and hit Generate to let AI style your wardrobe</p>
+                </div>
+            </section>
+
+            <!-- Wardrobe Grid -->
+            <section id="wardrobeSection">
+                <div class="wardrobe-grid" id="wardrobeGrid"></div>
+                <div class="empty-state" id="wardrobeEmpty" style="display:none;">
+                    <div class="empty-state__visual">
+                        <div class="empty-state__ring"></div>
+                        <svg class="empty-state__icon" width="36" height="36" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M3 2l7 10l-7 10"></path>
+                            <path d="M21 2l-7 10l7 10"></path>
+                            <line x1="12" y1="2" x2="12" y2="6"></line>
+                        </svg>
+                    </div>
+                    <h3 class="empty-state__title">Your wardrobe is empty</h3>
+                    <p class="empty-state__desc">Browse Yupoo and save items to start building your collection</p>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="wardrobe.js"></script>
+</body>
+
+</html>

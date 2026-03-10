@@ -9,7 +9,7 @@ document.addEventListener('DOMContentLoaded', init);
 async function init() {
     // Load settings
     const result = await chrome.storage.sync.get(SETTINGS_KEY);
-    const settings = result[SETTINGS_KEY] || { targetCurrency: 'USD', darkMode: true };
+    const settings = result[SETTINGS_KEY] || { targetCurrency: 'USD', darkMode: true, betaWardrobeEnabled: false };
 
     // Set currency dropdown
     const currencySelect = document.getElementById('currency');
@@ -23,6 +23,10 @@ async function init() {
     const darkModeCheckbox = document.getElementById('darkMode');
     darkModeCheckbox.checked = settings.darkMode !== false; // default true
 
+    // Set beta wardrobe toggle
+    const betaWardrobeCheckbox = document.getElementById('betaWardrobeEnabled');
+    betaWardrobeCheckbox.checked = settings.betaWardrobeEnabled === true;
+
     // Set AI provider and API key
     const providerSelect = document.getElementById('aiProvider');
     const apiKeyInput = document.getElementById('aiApiKey');
@@ -34,9 +38,13 @@ async function init() {
     // Load current rate
     loadRate(settings.targetCurrency);
 
+    // Check Google Calendar status
+    checkGcalStatus();
+
     // Event listeners
     document.getElementById('saveBtn').addEventListener('click', save);
     document.getElementById('refreshRate').addEventListener('click', refreshRate);
+    document.getElementById('gcalSyncBtn').addEventListener('click', syncGoogleCalendar);
     currencySelect.addEventListener('change', () => {
         loadRate(currencySelect.value);
     });
@@ -95,6 +103,7 @@ async function save() {
         targetCurrency: document.getElementById('currency').value,
         selectedAgent: document.getElementById('selectedAgent').value,
         darkMode: document.getElementById('darkMode').checked,
+        betaWardrobeEnabled: document.getElementById('betaWardrobeEnabled').checked,
         aiProvider: document.getElementById('aiProvider').value,
         // Only update API key if user entered something (preserve existing if empty)
         aiApiKey: apiKey || existingSettings.aiApiKey || ''
@@ -107,6 +116,58 @@ async function save() {
     status.textContent = '✓ Saved';
     status.classList.add('save-status--visible');
     setTimeout(() => status.classList.remove('save-status--visible'), 2000);
+}
+
+// ── Google Calendar ────────────────────────────────────────────
+function checkGcalStatus() {
+    const statusEl = document.getElementById('gcalStatus');
+    const btn = document.getElementById('gcalSyncBtn');
+
+    try {
+        chrome.identity.getAuthToken({ interactive: false }, (token) => {
+            if (chrome.runtime.lastError || !token) {
+                statusEl.textContent = 'Not connected';
+                statusEl.style.color = '';
+                btn.textContent = 'Sync Calendar';
+            } else {
+                statusEl.textContent = 'Connected';
+                statusEl.style.color = '#2ecc71';
+                btn.textContent = 'Re-sync';
+            }
+        });
+    } catch {
+        statusEl.textContent = 'Not available';
+    }
+}
+
+async function syncGoogleCalendar() {
+    const statusEl = document.getElementById('gcalStatus');
+    const btn = document.getElementById('gcalSyncBtn');
+    btn.textContent = 'Connecting...';
+    btn.disabled = true;
+
+    try {
+        const token = await new Promise((resolve, reject) => {
+            chrome.identity.getAuthToken({ interactive: true }, (token) => {
+                if (chrome.runtime.lastError) {
+                    reject(new Error(chrome.runtime.lastError.message));
+                } else {
+                    resolve(token);
+                }
+            });
+        });
+
+        statusEl.textContent = 'Connected';
+        statusEl.style.color = '#2ecc71';
+        btn.textContent = 'Re-sync';
+        btn.disabled = false;
+    } catch (err) {
+        console.error('[YuCart] Google Calendar sync failed:', err);
+        statusEl.textContent = 'Failed — try again';
+        statusEl.style.color = '#e94560';
+        btn.textContent = 'Sync Calendar';
+        btn.disabled = false;
+    }
 }
 
 function timeSince(timestamp) {

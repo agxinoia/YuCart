@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YuCart — Yupoo Shopping Cart",
-  "version": "1.8",
+  "version": "2.0",
   "description": "Shopping cart for Yupoo",
   "icons": {
     "16": "icons/icon16.png",
@@ -14,7 +14,8 @@
     "cookies",
     "declarativeNetRequest",
     "alarms",
-    "scripting"
+    "scripting",
+    "identity"
   ],
   "host_permissions": [
     "https://open.er-api.com/*",
@@ -25,8 +26,16 @@
     "https://generativelanguage.googleapis.com/*",
     "https://www.superbuy.com/*",
     "https://www.kakobuy.com/*",
-    "https://www.sugargoo.com/*"
+    "https://www.sugargoo.com/*",
+    "https://www.googleapis.com/*",
+    "https://api.open-meteo.com/*"
   ],
+  "oauth2": {
+    "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/calendar.readonly"
+    ]
+  },
   "action": {
     "default_popup": "popup/popup.html",
     "default_icon": {

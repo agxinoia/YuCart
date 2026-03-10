@@ -7,12 +7,15 @@
 const RATE_CACHE_KEY = 'yucart_exchange_rate';
 const RATE_TTL = 6 * 60 * 60 * 1000; // 6 hours
 const CART_KEY = 'yucart_cart';
+const WARDROBE_KEY = 'yucart_wardrobe';
+const OUTFITS_KEY = 'yucart_outfits';
 const SETTINGS_KEY = 'yucart_settings';
 const DNR_RULE_ID = 1;
 
 const DEFAULT_SETTINGS = {
   targetCurrency: 'USD',
-  darkMode: true  // Dark mode enabled by default
+  darkMode: true,  // Dark mode enabled by default
+  betaWardrobeEnabled: false
 };
 
 // ── Update Checking ──────────────────────────────────────────
@@ -303,21 +306,35 @@ async function updateItemTitlesBatch(updates = []) {
   }
 
   const cart = await getCart();
-  const titlesById = new Map();
+  const updatesById = new Map();
   let hasUpdates = false;
 
   for (const update of updates) {
     const itemId = String(update?.itemId || '').trim();
     const cleanedTitle = String(update?.cleanedTitle || '').trim();
     if (!itemId || !cleanedTitle) continue;
-    titlesById.set(itemId, cleanedTitle);
+    updatesById.set(itemId, {
+      cleanedTitle,
+      itemType: update.itemType || null,
+      color: update.color || null
+    });
   }
 
   for (const item of cart) {
-    const nextTitle = titlesById.get(item.id);
-    if (!nextTitle || item.cleanedTitle === nextTitle) continue;
-    item.cleanedTitle = nextTitle;
-    hasUpdates = true;
+    const update = updatesById.get(item.id);
+    if (!update) continue;
+    if (item.cleanedTitle !== update.cleanedTitle) {
+      item.cleanedTitle = update.cleanedTitle;
+      hasUpdates = true;
+    }
+    if (update.itemType && item.itemType !== update.itemType) {
+      item.itemType = update.itemType;
+      hasUpdates = true;
+    }
+    if (update.color && item.color !== update.color) {
+      item.color = update.color;
+      hasUpdates = true;
+    }
   }
 
   if (hasUpdates) {
@@ -330,6 +347,8 @@ async function resetCleanedNames() {
   const cart = await getCart();
   for (const item of cart) {
     delete item.cleanedTitle;
+    delete item.itemType;
+    delete item.color;
   }
   await saveCart(cart);
   return cart;
@@ -340,10 +359,115 @@ async function clearCart() {
   return [];
 }
 
+// Remove.bg API Key
+const REMOVE_BG_API_KEY = 'DPTNpTyCv42yzSCResFgoirD';
+
+// ── Remove.bg API ───────────────────────────────────────────────
+async function removeBackground(imageUrl) {
+  try {
+    const formData = new FormData();
+    formData.append('image_url', imageUrl);
+    formData.append('size', 'auto');
+    formData.append('format', 'png');
+
+    const response = await fetch('https://api.remove.bg/v1.0/removebg', {
+      method: 'POST',
+      headers: {
+        'X-Api-Key': REMOVE_BG_API_KEY
+      },
+      body: formData
+    });
+
+    if (!response.ok) {
+      console.error('[YuCart] Remove.bg API error:', response.status);
+      return null;
+    }
+
+    const blob = await response.blob();
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.readAsDataURL(blob);
+    });
+  } catch (err) {
+    console.error('[YuCart] Remove.bg failed:', err);
+    return null;
+  }
+}
+
+// ── Wardrobe operations ──────────────────────────────────────
+async function getWardrobe() {
+  const result = await chrome.storage.local.get(WARDROBE_KEY);
+  return result[WARDROBE_KEY] || [];
+}
+
+async function saveWardrobe(wardrobe) {
+  await chrome.storage.local.set({ [WARDROBE_KEY]: wardrobe });
+}
+
+async function addToWardrobe(item) {
+  const wardrobe = await getWardrobe();
+  const existing = wardrobe.find(i => i.url === item.url);
+  if (existing) return wardrobe;
+  wardrobe.push({
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+    title: item.title || 'Untitled Item',
+    cleanedTitle: item.cleanedTitle || '',
+    price: parseFloat(item.price) || 0,
+    vendor: item.vendor || 'Unknown',
+    thumbnail: item.thumbnail || '',
+    url: item.url || '',
+    addedAt: Date.now(),
+    sourceCartId: item.sourceCartId || ''
+  });
+  await saveWardrobe(wardrobe);
+  return wardrobe;
+}
+
+async function removeFromWardrobe(itemId) {
+  let wardrobe = await getWardrobe();
+  wardrobe = wardrobe.filter(i => i.id !== itemId);
+  await saveWardrobe(wardrobe);
+  return wardrobe;
+}
+
+async function clearWardrobe() {
+  await saveWardrobe([]);
+  return [];
+}
+
+// ── Outfit operations ────────────────────────────────────────
+async function getOutfits() {
+  const result = await chrome.storage.local.get(OUTFITS_KEY);
+  return result[OUTFITS_KEY] || [];
+}
+
+async function saveOutfitToStorage(outfit) {
+  const outfits = await getOutfits();
+  outfit.id = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  outfit.createdAt = Date.now();
+  outfits.push(outfit);
+  if (outfits.length > 10) outfits.shift();
+  await chrome.storage.local.set({ [OUTFITS_KEY]: outfits });
+  return outfits;
+}
+
+async function deleteOutfit(outfitId) {
+  let outfits = await getOutfits();
+  outfits = outfits.filter(o => o.id !== outfitId);
+  await chrome.storage.local.set({ [OUTFITS_KEY]: outfits });
+  return outfits;
+}
+
 // ── Settings ─────────────────────────────────────────────────
 async function getSettings() {
   const result = await chrome.storage.sync.get(SETTINGS_KEY);
   return { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}) };
+}
+
+async function isWardrobeBetaEnabled() {
+  const settings = await getSettings();
+  return settings.betaWardrobeEnabled === true;
 }
 
 // ── Badge ────────────────────────────────────────────────────
@@ -460,6 +584,69 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           const cart = await getCart();
           updateBadge(cart);
           sendResponse({ success: true });
+          break;
+        }
+        case 'getWardrobe': {
+          if (!(await isWardrobeBetaEnabled())) {
+            sendResponse({ wardrobe: [], disabled: true });
+            break;
+          }
+          const wardrobe = await getWardrobe();
+          sendResponse({ wardrobe });
+          break;
+        }
+        case 'addToWardrobe': {
+          if (!(await isWardrobeBetaEnabled())) {
+            sendResponse({ success: false, error: 'wardrobe_beta_disabled' });
+            break;
+          }
+          const wardrobe = await addToWardrobe(msg.item);
+          sendResponse({ success: true, wardrobe });
+          break;
+        }
+        case 'removeFromWardrobe': {
+          if (!(await isWardrobeBetaEnabled())) {
+            sendResponse({ success: false, error: 'wardrobe_beta_disabled' });
+            break;
+          }
+          const wardrobe = await removeFromWardrobe(msg.itemId);
+          sendResponse({ success: true, wardrobe });
+          break;
+        }
+        case 'clearWardrobe': {
+          if (!(await isWardrobeBetaEnabled())) {
+            sendResponse({ success: false, error: 'wardrobe_beta_disabled' });
+            break;
+          }
+          const wardrobe = await clearWardrobe();
+          sendResponse({ success: true, wardrobe });
+          break;
+        }
+        case 'getOutfits': {
+          if (!(await isWardrobeBetaEnabled())) {
+            sendResponse({ outfits: [], disabled: true });
+            break;
+          }
+          const outfits = await getOutfits();
+          sendResponse({ outfits });
+          break;
+        }
+        case 'saveOutfit': {
+          if (!(await isWardrobeBetaEnabled())) {
+            sendResponse({ success: false, error: 'wardrobe_beta_disabled' });
+            break;
+          }
+          const outfits = await saveOutfitToStorage(msg.outfit);
+          sendResponse({ success: true, outfits });
+          break;
+        }
+        case 'deleteOutfit': {
+          if (!(await isWardrobeBetaEnabled())) {
+            sendResponse({ success: false, error: 'wardrobe_beta_disabled' });
+            break;
+          }
+          const outfits = await deleteOutfit(msg.outfitId);
+          sendResponse({ success: true, outfits });
           break;
         }
         case 'agentCheckoutTab': {

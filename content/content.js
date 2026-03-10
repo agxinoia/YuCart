@@ -22,6 +22,7 @@
     let exchangeRate = null;
     let targetCurrency = 'USD';
     let darkModeEnabled = true;
+    let wardrobeBetaEnabled = false;
 
     // ── Cleanup when extension is reloaded ─────────────────────
     let observer = null;
@@ -64,15 +65,36 @@
         return match ? match[1] : host;
     }
 
-    function extractPrice(text) {
+    // Extract all prices from text and return their sum
+    // Handles multiple prices separated by +, spaces, commas, Chinese characters
+    function extractPrices(text) {
+        const prices = [];
+
         for (const re of PRICE_REGEX) {
-            const m = text.match(re);
-            if (m) {
-                const p = parseFloat(m[1].replace(/,/g, ''));
-                if (p > 0 && p < 999999) return p;
+            // Use global flag to find all matches
+            const globalRe = new RegExp(re.source, 'g');
+            let match;
+            while ((match = globalRe.exec(text)) !== null) {
+                const p = parseFloat(match[1].replace(/,/g, ''));
+                if (p > 0 && p < 999999) {
+                    prices.push(p);
+                }
             }
         }
-        return null;
+
+        // Remove duplicates (same price found by different regex patterns)
+        const uniquePrices = [...new Set(prices)];
+
+        return {
+            prices: uniquePrices,
+            total: uniquePrices.reduce((sum, p) => sum + p, 0)
+        };
+    }
+
+    // Legacy function for backward compatibility - returns first price only
+    function extractPrice(text) {
+        const result = extractPrices(text);
+        return result.prices.length > 0 ? result.prices[0] : null;
     }
 
     // Extract the gallery subheading (e.g. Weidian/Taobao product link)
@@ -122,6 +144,7 @@
             if (resp?.settings) {
                 targetCurrency = resp.settings.targetCurrency || 'USD';
                 applyDarkMode(resp.settings.darkMode !== false);
+                applyWardrobeFeature(resp.settings.betaWardrobeEnabled === true);
             }
 
             const rateResp = await chrome.runtime.sendMessage({ action: 'getRate', currency: targetCurrency });
@@ -144,6 +167,13 @@
         document.body.classList.toggle('yucart-dark-mode', darkModeEnabled);
     }
 
+    function applyWardrobeFeature(enabled) {
+        wardrobeBetaEnabled = enabled === true;
+        if (!wardrobeBetaEnabled) {
+            document.querySelectorAll('.yucart-wardrobe-btn').forEach((btn) => btn.remove());
+        }
+    }
+
     // ── Listen for settings changes ────────────────────────────
     function handleSettingsChange(changes, area) {
         try {
@@ -153,6 +183,9 @@
                     // Update dark mode
                     if (newSettings.darkMode !== undefined) {
                         applyDarkMode(newSettings.darkMode);
+                    }
+                    if (newSettings.betaWardrobeEnabled !== undefined) {
+                        applyWardrobeFeature(newSettings.betaWardrobeEnabled);
                     }
                     // Update currency if changed
                     if (newSettings.targetCurrency && newSettings.targetCurrency !== targetCurrency) {
@@ -322,6 +355,94 @@
         return btn;
     }
 
+    // ── Convert image to high-res base64 for wardrobe ──────────
+    function imageToBase64HiRes(url) {
+        return new Promise((resolve) => {
+            if (!url || url.startsWith('data:')) {
+                resolve(url || '');
+                return;
+            }
+            // Use big variant for full resolution
+            const bigUrl = url.replace(/(big|medium|small)\.jpg/, 'big.jpg');
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => {
+                try {
+                    const canvas = document.createElement('canvas');
+                    const maxSize = 400;
+                    let w = img.naturalWidth;
+                    let h = img.naturalHeight;
+                    if (w > maxSize || h > maxSize) {
+                        if (w > h) { h = Math.round(h * maxSize / w); w = maxSize; }
+                        else { w = Math.round(w * maxSize / h); h = maxSize; }
+                    }
+                    canvas.width = w;
+                    canvas.height = h;
+                    canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                    resolve(canvas.toDataURL('image/jpeg', 0.85));
+                } catch (e) {
+                    console.warn('[YuCart CS] HiRes canvas export failed:', e.message);
+                    resolve('');
+                }
+            };
+            img.onerror = () => resolve('');
+            img.src = bigUrl;
+        });
+    }
+
+    // ── Create Add-to-Wardrobe button ──────────────────────────
+    async function createWardrobeButton(itemData, size = 'normal') {
+        const btn = document.createElement('button');
+        btn.className = `yucart-wardrobe-btn yucart-wardrobe-btn--${size}`;
+
+        btn.innerHTML = `
+      <svg width="${size === 'large' ? 18 : 14}" height="${size === 'large' ? 18 : 14}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
+      </svg>
+    `;
+
+        // Check if item is already in wardrobe
+        try {
+            const res = await chrome.runtime.sendMessage({ action: 'getWardrobe' });
+            const wardrobe = res.wardrobe || [];
+            const exists = wardrobe.some(i => i.url === itemData.url);
+            if (exists) {
+                btn.classList.add('yucart-wardrobe-btn--added');
+            }
+        } catch (err) {
+            // Ignore check errors
+        }
+
+        btn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            btn.classList.add('yucart-wardrobe-btn--added');
+
+            // Convert thumbnail to high-res base64 for wardrobe storage
+            const hiResThumbnail = await imageToBase64HiRes(itemData.thumbnail);
+
+            const wardrobeItem = {
+                id: Date.now().toString(),
+                title: itemData.title,
+                price: itemData.price,
+                vendor: itemData.vendor,
+                thumbnail: hiResThumbnail,
+                url: itemData.url,
+                addedAt: new Date().toISOString()
+            };
+
+            try {
+                await chrome.runtime.sendMessage({ action: 'addToWardrobe', item: wardrobeItem });
+                showToast('Added to wardrobe');
+            } catch (err) {
+                showToast('Failed to add');
+                btn.classList.remove('yucart-wardrobe-btn--added');
+            }
+        });
+
+        return btn;
+    }
+
     function queryIncludingRoot(root, selector) {
         if (!root) return [];
         if (root === document || root.nodeType === Node.DOCUMENT_NODE) {
@@ -348,8 +469,8 @@
 
             const titleEl = album.querySelector('.album__title');
             const titleText = titleEl?.textContent?.trim() || album.getAttribute('title') || '';
-            const price = extractPrice(titleText);
-            if (!price) return;
+            const priceResult = extractPrices(titleText);
+            if (!priceResult.total) return;
 
             const imgEl = album.querySelector('.album__img, .autocut, img');
             const thumbnail = getImageUrl(imgEl);
@@ -360,7 +481,7 @@
 
             const itemData = {
                 title: cleanTitle,
-                price: price,
+                price: priceResult.total,
                 vendor: getVendorName(),
                 thumbnail: thumbnail,
                 url: url
@@ -371,11 +492,11 @@
             overlay.className = 'yucart-album-overlay';
 
             // Converted price badge
-            const convertedStr = formatConverted(price);
+            const convertedStr = formatConverted(priceResult.total);
             if (convertedStr) {
                 const badge = document.createElement('div');
                 badge.className = 'yucart-price-badge';
-                badge.textContent = `¥${price} ≈ ${convertedStr}`;
+                badge.textContent = `¥${priceResult.total} ≈ ${convertedStr}`;
                 overlay.appendChild(badge);
             }
 
@@ -395,14 +516,14 @@
     // Cache detail page item data so the lightbox can reuse it
     let detailPageItemData = null;
 
-    function processDetailPage() {
+    async function processDetailPage() {
         const titleEl = document.querySelector('.showalbumheader__gallerytitle, .showalbumheader__title');
         if (!titleEl) return;
         if (document.querySelector('.yucart-detail-bar')) return; // already injected
 
         const titleText = titleEl.textContent.trim();
-        const price = extractPrice(titleText);
-        if (!price) return;
+        const priceResult = extractPrices(titleText);
+        if (!priceResult.total) return;
 
         // Get first image from gallery
         const galleryImg = document.querySelector('.showalbum__children img');
@@ -417,7 +538,7 @@
 
         const itemData = {
             title: cleanTitle,
-            price: price,
+            price: priceResult.total,
             vendor: getVendorName(),
             thumbnail: thumbnail,
             url: window.location.href,
@@ -431,8 +552,8 @@
         const bar = document.createElement('div');
         bar.className = 'yucart-detail-bar';
 
-        const convertedStr = formatConverted(price);
-        const priceDisplay = convertedStr ? `¥${price} ≈ ${convertedStr}` : `¥${price}`;
+        const convertedStr = formatConverted(priceResult.total);
+        const priceDisplay = convertedStr ? `¥${priceResult.total} ≈ ${convertedStr}` : `¥${priceResult.total}`;
 
         bar.innerHTML = `
       <div class="yucart-detail-bar__info">
@@ -441,8 +562,10 @@
       </div>
     `;
 
-        const btn = createCartButton(itemData, 'large');
-        bar.appendChild(btn);
+        bar.appendChild(createCartButton(itemData, 'large'));
+        if (wardrobeBetaEnabled) {
+            bar.appendChild(await createWardrobeButton(itemData, 'large'));
+        }
 
         // Insert after the header
         const headerArea = document.querySelector('.showalbumheader') || titleEl.parentElement;
@@ -464,8 +587,8 @@
             if (item.querySelector('.yucart-add-btn')) return;
 
             const titleText = item.getAttribute('title') || item.textContent.trim();
-            const price = extractPrice(titleText);
-            if (!price) return;
+            const priceResult = extractPrices(titleText);
+            if (!priceResult.total) return;
 
             const imgEl = item.querySelector('img');
             const thumbnail = getImageUrl(imgEl);
@@ -474,7 +597,7 @@
 
             const itemData = {
                 title: cleanTitle,
-                price: price,
+                price: priceResult.total,
                 vendor: getVendorName(),
                 thumbnail: thumbnail,
                 url: url
@@ -485,11 +608,11 @@
             const overlay = document.createElement('div');
             overlay.className = 'yucart-album-overlay';
 
-            const convertedStr = formatConverted(price);
+            const convertedStr = formatConverted(priceResult.total);
             if (convertedStr) {
                 const badge = document.createElement('div');
                 badge.className = 'yucart-price-badge';
-                badge.textContent = `¥${price} ≈ ${convertedStr}`;
+                badge.textContent = `¥${priceResult.total} ≈ ${convertedStr}`;
                 overlay.appendChild(badge);
             }
 
@@ -548,9 +671,9 @@
     }
 
     // ── Main scan ──────────────────────────────────────────────
-    function scanPage() {
+    async function scanPage() {
         processAlbumListings();
-        processDetailPage();
+        await processDetailPage();
         processIndexPage();
         processImageViewer();
     }
