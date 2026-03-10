@@ -2,7 +2,7 @@
 
 ![Version](https://img.shields.io/badge/version-2.0-blue.svg)
 
-A Chrome extension that enhances the shopping experience on Yupoo for international fashion shoppers. Built for the FashionReps community and anyone who browses Yupoo stores and purchases through shopping agents like Superbuy, KakoBuy, and Sugargoo.
+A Chrome extension that enhances the shopping experience on Yupoo for international fashion shoppers. Built for the FashionReps community and anyone who browses Yupoo stores and purchases through shopping agents like Superbuy, AllChinaBuy, KakoBuy, Sugargoo, ACBuy, Mulebuy, and OOPBUY.
 
 ## Why YuCart?
 
@@ -28,10 +28,11 @@ Whenever I get a haul together, I usually open Notepad and paste links in or jus
 - Gemini uses product images for more accurate identification
 
 ### Agent Checkout
-- One-click checkout to **Superbuy**, **KakoBuy**, **Sugargoo**, or raw links
+- One-click checkout to **Superbuy**, **AllChinaBuy**, **KakoBuy**, **Sugargoo**, **ACBuy**, **Mulebuy**, **OOPBUY**, or raw links
 - Automatically extracts Weidian/Taobao source links from product pages
 - Opens agent pages and clicks "Add to Cart" automatically
 - Progress tracking with success/failure feedback
+- Disclosed affiliate checkout/support links for supported agents
 
 ### Wardrobe & AI Outfit Generation
 - Save purchased items to your personal wardrobe
@@ -58,10 +59,10 @@ Whenever I get a haul together, I usually open Notepad and paste links in or jus
 5. The YuCart icon will appear in your toolbar
 
 ## To-Do List
-- [ ] Add support for more agents
+- [x] Add support for more agents
 - [x] Add a checkout option that adds all products to your selected agent
 - [x] Add wardrobe feature with AI outfit generation
 
 ## Support
 
-If you find this extension helpful, consider supporting its development. You can find donation options in the extension settings.
+If you find this extension helpful, consider supporting its development. YuCart may earn a commission if you use clearly disclosed agent links from the extension's checkout or support settings.

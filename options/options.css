@@ -375,9 +375,88 @@ body {
 }
 
 .card--collapsible:hover .card__content {
-    max-height: 500px;
+    max-height: 3600px;
     opacity: 1;
     margin-top: 12px;
+}
+
+.affiliate-note {
+    margin-bottom: 16px;
+    padding: 12px 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+
+.affiliate-note code {
+    color: var(--teal);
+    font-family: 'Courier New', monospace;
+}
+
+.affiliate-grid {
+    display: grid;
+    gap: 14px;
+}
+
+.affiliate-card {
+    display: grid;
+    gap: 12px;
+    padding: 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+
+.affiliate-card__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.affiliate-card__title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.affiliate-card__status {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.affiliate-card__status code {
+    color: var(--teal);
+    font-family: 'Courier New', monospace;
+}
+
+.affiliate-link-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 14px;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(168, 237, 234, 0.2);
+    background: rgba(168, 237, 234, 0.08);
+    color: var(--teal);
+    font-size: 12px;
+    font-weight: 700;
+    text-decoration: none;
+    transition: all 0.2s ease;
+}
+
+.affiliate-link-btn:hover {
+    border-color: rgba(168, 237, 234, 0.35);
+    background: rgba(168, 237, 234, 0.14);
+}
+
+.affiliate-link-btn--disabled {
+    opacity: 0.55;
+    pointer-events: none;
 }
 
 /* ── Developer Credit ────────────────────────────────────────── */

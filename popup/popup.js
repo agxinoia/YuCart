@@ -13,6 +13,24 @@ let aiApiKey = '';
 const GEMINI_MAX_ITEMS_PER_BATCH = 20;
 const GEMINI_MAX_IMAGE_DIMENSION = 320;
 const GEMINI_IMAGE_QUALITY = 0.72;
+const AGENT_META = {
+    superbuy: { name: 'Superbuy' },
+    allchinabuy: { name: 'AllChinaBuy' },
+    kakobuy: { name: 'KakoBuy' },
+    sugargoo: { name: 'Sugargoo' },
+    acbuy: { name: 'ACBuy' },
+    mulebuy: { name: 'Mulebuy' },
+    oopbuy: { name: 'OOPBUY' },
+    raw: { name: 'Raw Link' }
+};
+const SUPERBUY_PARTNER_CODE = 'Eb6pHI';
+const ALLCHINABUY_PARTNER_CODE = 'Eb65dD';
+const KAKOBUY_AFFCODE = 'yucart';
+const SUGARGOO_MEMBER_ID = '3161294460426724183';
+const ACBUY_USER_CODE = 'K9ZLJF';
+const MULEBUY_REF = '201039387';
+const OOPBUY_INVITE_CODE = 'SEZRCZCLM';
+const GENERIC_ADD_TO_CART_SELECTOR = '.goods-addToCart, .btn-addToCart, .add-cart-btn, .product-action .btn-cart, button[class*="addToCart"], button[class*="add-cart"], button[class*="cart"], .btn-cart';
 
 const CURRENCY_SYMBOLS = {
     USD: '$', EUR: '€', GBP: '£', AUD: 'A$', CAD: 'C$',
@@ -35,6 +53,88 @@ function formatConverted(cny) {
     const val = convertPrice(cny);
     if (val === null) return '';
     return `≈ ${currencySymbol(settings.targetCurrency || 'USD')}${val.toFixed(2)}`;
+}
+
+function appendQueryParam(url, key, value) {
+    const parsed = new URL(url);
+    parsed.searchParams.set(key, value);
+    return parsed.toString();
+}
+
+function getUrlSearchParam(rawUrl, keys) {
+    const url = new URL(rawUrl);
+    for (const key of keys) {
+        const value = url.searchParams.get(key);
+        if (value) return value;
+    }
+    return '';
+}
+
+function getMarketplaceContext(rawUrl) {
+    try {
+        const url = new URL(rawUrl);
+        const host = url.hostname.toLowerCase();
+
+        if (host.includes('weidian.com')) {
+            return {
+                itemId: getUrlSearchParam(rawUrl, ['itemID', 'itemId', 'id']),
+                sourceCode: 'WD',
+                platformCode: 'WEIDIAN',
+                platformSlug: 'weidian'
+            };
+        }
+
+        if (host.includes('taobao.com') || host.includes('tmall.com')) {
+            return {
+                itemId: getUrlSearchParam(rawUrl, ['id']),
+                sourceCode: 'TB',
+                platformCode: 'TAOBAO',
+                platformSlug: 'taobao'
+            };
+        }
+
+        if (host.includes('1688.com')) {
+            const pathMatch = url.pathname.match(/\/offer\/(\d+)\.html/i);
+            return {
+                itemId: pathMatch?.[1] || getUrlSearchParam(rawUrl, ['offerId', 'id']),
+                sourceCode: '1688',
+                platformCode: '1688',
+                platformSlug: '1688'
+            };
+        }
+    } catch (err) {
+        return null;
+    }
+
+    return null;
+}
+
+function buildAgentCheckoutUrl(agentId, productUrl) {
+    const market = getMarketplaceContext(productUrl);
+
+    switch (agentId) {
+        case 'superbuy':
+            return appendQueryParam(BASE_AGENT_URL_BUILDERS.superbuy(productUrl), 'partnercode', SUPERBUY_PARTNER_CODE);
+        case 'allchinabuy':
+            return appendQueryParam(BASE_AGENT_URL_BUILDERS.allchinabuy(productUrl), 'partnercode', ALLCHINABUY_PARTNER_CODE);
+        case 'kakobuy':
+            return appendQueryParam(BASE_AGENT_URL_BUILDERS.kakobuy(productUrl), 'affcode', KAKOBUY_AFFCODE);
+        case 'sugargoo':
+            return `https://www.sugargoo.com/products?productLink=${encodeURIComponent(productUrl)}&memberId=${SUGARGOO_MEMBER_ID}`;
+        case 'acbuy':
+            if (!market?.itemId) return null;
+            return `https://www.acbuy.com/product?id=${encodeURIComponent(market.itemId)}&u=${ACBUY_USER_CODE}&source=${encodeURIComponent(market.sourceCode)}`;
+        case 'mulebuy':
+            if (!market?.itemId) return null;
+            return `https://mulebuy.com/product?id=${encodeURIComponent(market.itemId)}&platform=${encodeURIComponent(market.platformCode)}&ref=${MULEBUY_REF}`;
+        case 'oopbuy':
+            if (!market?.itemId) return null;
+            return `https://oopbuy.com/product/${encodeURIComponent(market.platformSlug)}/${encodeURIComponent(market.itemId)}?inviteCode=${OOPBUY_INVITE_CODE}`;
+        case 'raw':
+            return productUrl;
+        default:
+            return null;
+    }
 }
 
 // ── Init ─────────────────────────────────────────────────────
@@ -214,10 +314,8 @@ function render() {
     document.getElementById('totalConverted').textContent = formatConverted(grandTotal);
 
     // Update checkout button text with agent name
-    const agentNames = { superbuy: 'Superbuy', kakobuy: 'KakoBuy', sugargoo: 'Sugargoo', raw: 'Raw Link' };
-    const agentName = agentNames[settings.selectedAgent || 'superbuy'] || 'Agent';
+    const agentName = AGENT_META[settings.selectedAgent || 'superbuy']?.name || 'Agent';
     document.getElementById('checkoutBtnText').textContent = `Checkout to ${agentName}`;
-
     // Bind events
     bindItemEvents();
 
@@ -825,17 +923,21 @@ function escapeHtml(str) {
 
 // ── Agent Checkout ───────────────────────────────────────────
 
-const AGENT_URL_BUILDERS = {
+const BASE_AGENT_URL_BUILDERS = {
     superbuy: (rawUrl) => `https://www.superbuy.com/en/page/buy/?nTag=Home-search&from=search-input&url=${encodeURIComponent(rawUrl)}`,
     kakobuy: (rawUrl) => `https://www.kakobuy.com/item/details?url=${encodeURIComponent(rawUrl)}`,
-    sugargoo: (rawUrl) => `https://www.sugargoo.com/products?productLink=${encodeURIComponent(encodeURIComponent(rawUrl))}`,
+    allchinabuy: (rawUrl) => `https://www.allchinabuy.com/en/page/buy/?nTag=Home-search&from=search-input&_search=url&position=&url=${encodeURIComponent(rawUrl)}`,
     raw: (rawUrl) => rawUrl
 };
 
 const AGENT_ADD_CART_SELECTORS = {
     superbuy: '.goods-addToCart, .btn-addToCart, button[class*="addToCart"]',
+    allchinabuy: '.goods-addToCart, .btn-addToCart, button[class*="addToCart"]',
     kakobuy: '.goods-addToCart, .product-action .btn-cart, button[class*="addToCart"]',
     sugargoo: '.goods-addToCart, .add-cart-btn, button[class*="addToCart"]',
+    acbuy: GENERIC_ADD_TO_CART_SELECTOR,
+    mulebuy: GENERIC_ADD_TO_CART_SELECTOR,
+    oopbuy: GENERIC_ADD_TO_CART_SELECTOR,
     raw: null
 };
 
@@ -845,11 +947,11 @@ function extractProductLink(item) {
     for (const text of candidates) {
         if (!text) continue;
         // Match weidian, taobao, or 1688 URLs
-        const urlRegex = /https?:\/\/[^\s<>"']*(?:weidian\.com|taobao\.com|1688\.com)[^\s<>"']*/i;
+        const urlRegex = /https?:\/\/[^\s<>"']*(?:weidian\.com|taobao\.com|tmall\.com|1688\.com)[^\s<>"']*/i;
         const match = text.match(urlRegex);
         if (match) return match[0];
         // Try without protocol (some subtitles omit https://)
-        const noProto = /(?:weidian\.com|taobao\.com|1688\.com)\/[^\s<>"']*/i;
+        const noProto = /(?:weidian\.com|taobao\.com|tmall\.com|1688\.com)\/[^\s<>"']*/i;
         const match2 = text.match(noProto);
         if (match2) return 'https://' + match2[0];
     }
@@ -858,8 +960,8 @@ function extractProductLink(item) {
 
 async function handleCheckout() {
     const agent = settings.selectedAgent || 'superbuy';
-    const urlBuilder = AGENT_URL_BUILDERS[agent];
-    if (!urlBuilder) {
+    const agentMeta = AGENT_META[agent];
+    if (!agentMeta) {
         showToast('Unknown agent selected');
         return;
     }
@@ -869,12 +971,15 @@ async function handleCheckout() {
     for (const item of cart) {
         const link = extractProductLink(item);
         if (link) {
-            checkoutItems.push({ item, agentUrl: urlBuilder(link) });
+            const agentUrl = buildAgentCheckoutUrl(agent, link);
+            if (agentUrl) {
+                checkoutItems.push({ item, agentUrl });
+            }
         }
     }
 
     if (checkoutItems.length === 0) {
-        showToast('No Weidian/Taobao links found — add items from detail pages');
+        showToast('No supported product links found — add items from detail pages');
         return;
     }
 

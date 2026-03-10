@@ -27,6 +27,10 @@
     "https://www.superbuy.com/*",
     "https://www.kakobuy.com/*",
     "https://www.sugargoo.com/*",
+    "https://oopbuy.com/*",
+    "https://www.acbuy.com/*",
+    "https://mulebuy.com/*",
+    "https://www.allchinabuy.com/*",
     "https://www.googleapis.com/*",
     "https://api.open-meteo.com/*"
   ],

@@ -3,6 +3,43 @@
    ============================================================ */
 
 const SETTINGS_KEY = 'yucart_settings';
+const SUPPORT_AFFILIATE_LINKS = {
+    superbuy: {
+        name: 'Superbuy',
+        registerUrl: 'https://www.superbuy.com/en/page/login?partnercode=Eb6pHI&type=register',
+        note: 'Automatic checkout adds partner code Eb6pHI.'
+    },
+    allchinabuy: {
+        name: 'AllChinaBuy',
+        registerUrl: 'https://www.allchinabuy.com/en/page/login?partnercode=Eb65dD&type=register',
+        note: 'Automatic checkout adds partner code Eb65dD.'
+    },
+    kakobuy: {
+        name: 'KakoBuy',
+        registerUrl: 'https://ikako.vip/r/yucart',
+        note: 'Automatic checkout appends affcode=yucart.'
+    },
+    sugargoo: {
+        name: 'Sugargoo',
+        registerUrl: 'https://www.sugargoo.com/register?memberId=3161294460426724183',
+        note: 'Automatic checkout adds memberId 3161294460426724183.'
+    },
+    acbuy: {
+        name: 'ACBuy',
+        registerUrl: 'https://www.acbuy.com/login?loginStatus=register&code=K9ZLJF',
+        note: 'Automatic checkout uses your ACBuy code K9ZLJF.'
+    },
+    mulebuy: {
+        name: 'Mulebuy',
+        registerUrl: 'https://mulebuy.com/register?ref=201039387',
+        note: 'Automatic checkout uses your Mulebuy ref 201039387.'
+    },
+    oopbuy: {
+        name: 'OOPBUY',
+        registerUrl: 'https://oopbuy.com/register?inviteCode=SEZRCZCLM',
+        note: 'Automatic checkout uses your OOPBUY invite code SEZRCZCLM.'
+    }
+};
 
 document.addEventListener('DOMContentLoaded', init);
 
@@ -35,6 +72,8 @@ async function init() {
         apiKeyInput.value = settings.aiApiKey;
     }
 
+    renderSupportAffiliateLink(agentSelect.value);
+
     // Load current rate
     loadRate(settings.targetCurrency);
 
@@ -47,6 +86,9 @@ async function init() {
     document.getElementById('gcalSyncBtn').addEventListener('click', syncGoogleCalendar);
     currencySelect.addEventListener('change', () => {
         loadRate(currencySelect.value);
+    });
+    agentSelect.addEventListener('change', () => {
+        renderSupportAffiliateLink(agentSelect.value);
     });
 }
 
@@ -100,6 +142,7 @@ async function save() {
     const apiKey = apiKeyInput.value.trim();
     
     const settings = {
+        ...existingSettings,
         targetCurrency: document.getElementById('currency').value,
         selectedAgent: document.getElementById('selectedAgent').value,
         darkMode: document.getElementById('darkMode').checked,
@@ -116,6 +159,47 @@ async function save() {
     status.textContent = '✓ Saved';
     status.classList.add('save-status--visible');
     setTimeout(() => status.classList.remove('save-status--visible'), 2000);
+}
+
+function renderSupportAffiliateLink(agentId) {
+    const grid = document.getElementById('affiliateGrid');
+    if (!grid) return;
+    const entry = SUPPORT_AFFILIATE_LINKS[agentId];
+
+    if (!entry) {
+        grid.innerHTML = `
+            <div class="affiliate-card">
+                <div class="affiliate-card__header">
+                    <div>
+                        <h3 class="affiliate-card__title">Raw Link</h3>
+                        <p class="affiliate-card__status">Raw Link mode does not have an affiliate registration page.</p>
+                    </div>
+                </div>
+                <button class="affiliate-link-btn affiliate-link-btn--disabled" type="button" disabled>Open Raw Link registration</button>
+            </div>
+        `;
+        return;
+    }
+
+    grid.innerHTML = `
+        <div class="affiliate-card">
+            <div class="affiliate-card__header">
+                <div>
+                    <h3 class="affiliate-card__title">${escapeHtml(entry.name)}</h3>
+                    <p class="affiliate-card__status">${escapeHtml(entry.note)}</p>
+                </div>
+            </div>
+            <a href="${escapeHtml(entry.registerUrl)}" class="affiliate-link-btn" target="_blank" rel="noopener noreferrer">Open ${escapeHtml(entry.name)} registration</a>
+        </div>
+    `;
+}
+
+const _escapeMap = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const _escapeRe = /[&<>"']/g;
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str).replace(_escapeRe, c => _escapeMap[c]);
 }
 
 // ── Google Calendar ────────────────────────────────────────────

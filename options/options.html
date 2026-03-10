@@ -80,8 +80,12 @@
                 <label for="selectedAgent">Agent</label>
                 <select id="selectedAgent">
                     <option value="superbuy">Superbuy</option>
+                    <option value="allchinabuy">AllChinaBuy</option>
                     <option value="kakobuy">KakoBuy</option>
                     <option value="sugargoo">Sugargoo</option>
+                    <option value="acbuy">ACBuy</option>
+                    <option value="mulebuy">Mulebuy</option>
+                    <option value="oopbuy">OOPBUY</option>
                     <option value="raw">Raw Link (no agent)</option>
                 </select>
             </div>
@@ -211,7 +215,7 @@
             </div>
         </section>
 
-        <!-- Donations Section -->
+        <!-- Support Section -->
         <section class="card card--collapsible">
             <div class="card__header">
                 <h2 class="card__title">
@@ -221,7 +225,7 @@
                             d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z">
                         </path>
                     </svg>
-                    Support Development
+                    Support YuCart
                 </h2>
                 <svg class="card__chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -230,7 +234,19 @@
             </div>
 
             <div class="card__content">
-                <p class="card__desc">If you find this extension helpful, consider supporting its development.</p>
+                <p class="card__desc">
+                    YuCart may earn a commission if you use the disclosed registration link for the agent selected
+                    above. For supported agents, checkout links are generated automatically inside YuCart when that
+                    agent is selected.
+                </p>
+
+                <div class="affiliate-note">
+                    YuCart uses the long-form affiliate import URLs that the shortlinks resolve into. That means the
+                    extension can build checkout links directly from the product URL instead of depending on opaque
+                    shortlinks like <code>oopbuy.cc</code>, <code>ikako.vip</code>, or <code>link.acbuy.com</code>.
+                </div>
+
+                <div class="affiliate-grid" id="affiliateGrid"></div>
 
                 <!-- Developer Credit -->
                 <div class="developer-credit">
