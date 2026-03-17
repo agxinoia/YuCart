@@ -4,6 +4,12 @@
             DNR rules for image loading
    ============================================================ */
 
+try {
+  importScripts('../shared/agent-checkout-config.js');
+} catch (error) {
+  console.error('[YuCart BG] Failed to load agent checkout config:', error);
+}
+
 const RATE_CACHE_KEY = 'yucart_exchange_rate';
 const RATE_TTL = 6 * 60 * 60 * 1000; // 6 hours
 const CART_KEY = 'yucart_cart';
@@ -11,11 +17,16 @@ const WARDROBE_KEY = 'yucart_wardrobe';
 const OUTFITS_KEY = 'yucart_outfits';
 const SETTINGS_KEY = 'yucart_settings';
 const DNR_RULE_ID = 1;
+const {
+  AGENT_CHECKOUT_CONFIG = {},
+  getAgentCheckoutConfig = () => null
+} = globalThis.YuCartAgentCheckout || {};
 
 const DEFAULT_SETTINGS = {
   targetCurrency: 'USD',
   darkMode: true,  // Dark mode enabled by default
-  betaWardrobeEnabled: false
+  betaWardrobeEnabled: false,
+  popupScale: 1
 };
 
 // ── Update Checking ──────────────────────────────────────────
@@ -470,6 +481,552 @@ async function isWardrobeBetaEnabled() {
   return settings.betaWardrobeEnabled === true;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForTabComplete(tabId, timeoutMs = 30000) {
+  await new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      chrome.tabs.onUpdated.removeListener(listener);
+      clearTimeout(timeout);
+      resolve();
+    };
+    const timeout = setTimeout(() => {
+      finish();
+    }, timeoutMs);
+
+    function listener(updatedTabId, changeInfo) {
+      if (updatedTabId === tabId && changeInfo.status === 'complete') {
+        finish();
+      }
+    }
+
+    chrome.tabs.onUpdated.addListener(listener);
+    chrome.tabs.get(tabId).then((tab) => {
+      if (tab?.status === 'complete') {
+        finish();
+      }
+    }).catch(() => {
+      // The timeout or onUpdated listener will resolve if the tab still exists.
+    });
+  });
+}
+
+async function runScriptInTab(tabId, func, args = []) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func,
+      args
+    });
+    return results?.[0]?.result ?? null;
+  } catch (error) {
+    console.warn('[YuCart BG] Script execution failed:', error?.message || error);
+    return null;
+  }
+}
+
+function inspectAgentCheckoutPage(config) {
+  const selectors = {
+    ready: Array.isArray(config?.readySelectors) ? config.readySelectors : [],
+    add: Array.isArray(config?.addToCartSelectors) ? config.addToCartSelectors : [],
+    login: Array.isArray(config?.loginGateSelectors) ? config.loginGateSelectors : []
+  };
+  const readyTextPatterns = Array.isArray(config?.readyTextPatterns) ? config.readyTextPatterns : [];
+  const addTextPatterns = Array.isArray(config?.addToCartTextPatterns) ? config.addToCartTextPatterns : [];
+  const loginTextPatterns = Array.isArray(config?.loginTextPatterns) ? config.loginTextPatterns : [];
+  const failureTextPatterns = Array.isArray(config?.failureTextPatterns) ? config.failureTextPatterns : [];
+  const securityTextPatterns = Array.isArray(config?.securityTextPatterns) ? config.securityTextPatterns : [];
+
+  const isVisible = (element) => !!(element && (element.offsetWidth || element.offsetHeight || element.getClientRects().length));
+  const elementText = (element) => `${element?.innerText || element?.textContent || ''} ${element?.className || ''} ${element?.id || ''}`
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  const bodyText = `${document.title || ''} ${document.body?.innerText || ''}`.replace(/\s+/g, ' ').trim().toLowerCase();
+
+  const hasPattern = (text, patterns) => patterns.some((pattern) => text.includes(String(pattern).toLowerCase()));
+  const hasVisibleSelector = (list) => list.some((selector) => {
+    try {
+      return Array.from(document.querySelectorAll(selector)).some(isVisible);
+    } catch {
+      return false;
+    }
+  });
+  const hasVisiblePattern = (patterns) => {
+    if (!patterns.length) return false;
+    if (hasPattern(bodyText, patterns)) return true;
+    return Array.from(document.querySelectorAll('body *')).some((element) => isVisible(element) && hasPattern(elementText(element), patterns));
+  };
+  const hasVisibleLoginGate = () => {
+    if (hasVisibleSelector(selectors.login)) return true;
+
+    const modalSelectors = [
+      '.ant-modal',
+      '.ant-modal-content',
+      '.el-dialog',
+      '.el-overlay',
+      '.ivu-modal',
+      '.ivu-modal-content',
+      '.n-dialog',
+      '[class*="modal"]',
+      '[class*="dialog"]'
+    ];
+
+    for (const selector of modalSelectors) {
+      try {
+        const nodes = Array.from(document.querySelectorAll(selector));
+        for (const node of nodes) {
+          if (!isVisible(node)) continue;
+          if (hasPattern(elementText(node), loginTextPatterns)) {
+            return true;
+          }
+        }
+      } catch {
+        // Ignore invalid selectors.
+      }
+    }
+
+    return false;
+  };
+
+  if (hasVisiblePattern(securityTextPatterns)) {
+    return { status: 'security_check' };
+  }
+
+  if (
+    hasVisibleSelector(selectors.ready) ||
+    hasVisibleSelector(selectors.add) ||
+    hasVisiblePattern(readyTextPatterns) ||
+    hasVisiblePattern(addTextPatterns)
+  ) {
+    return { status: 'ready' };
+  }
+
+  if (hasVisibleLoginGate()) {
+    return { status: 'login_required' };
+  }
+
+  if (hasVisiblePattern(failureTextPatterns)) {
+    return { status: 'blocked' };
+  }
+
+  return { status: 'not_ready' };
+}
+
+function clickAgentAddToCart(config) {
+  const selectors = Array.isArray(config?.addToCartSelectors) ? config.addToCartSelectors : [];
+  const addTextPatterns = (Array.isArray(config?.addToCartTextPatterns) ? config.addToCartTextPatterns : [])
+    .map((pattern) => String(pattern).toLowerCase());
+  const loginTextPatterns = (Array.isArray(config?.loginTextPatterns) ? config.loginTextPatterns : [])
+    .map((pattern) => String(pattern).toLowerCase());
+  const failureTextPatterns = (Array.isArray(config?.failureTextPatterns) ? config.failureTextPatterns : [])
+    .map((pattern) => String(pattern).toLowerCase());
+  const securityTextPatterns = (Array.isArray(config?.securityTextPatterns) ? config.securityTextPatterns : [])
+    .map((pattern) => String(pattern).toLowerCase());
+  const agreementTextPatterns = (Array.isArray(config?.agreementTextPatterns) ? config.agreementTextPatterns : [])
+    .map((pattern) => String(pattern).toLowerCase());
+  const cartBadgeSelectors = Array.isArray(config?.cartBadgeSelectors) ? config.cartBadgeSelectors : [];
+
+  const isVisible = (element) => !!(element && (element.offsetWidth || element.offsetHeight || element.getClientRects().length));
+  const normalizeText = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const getElementText = (element) => normalizeText(`${element?.innerText || element?.textContent || ''} ${element?.className || ''} ${element?.id || ''}`);
+  const bodyText = normalizeText(`${document.title || ''} ${document.body?.innerText || ''}`);
+  const matchesAny = (text, patterns) => patterns.some((pattern) => text.includes(pattern));
+  const isDisabled = (element) => {
+    if (!element) return true;
+    if (element.disabled) return true;
+    const ariaDisabled = element.getAttribute?.('aria-disabled');
+    return ariaDisabled === 'true';
+  };
+  const readCartCount = () => {
+    for (const selector of cartBadgeSelectors) {
+      try {
+        const nodes = Array.from(document.querySelectorAll(selector));
+        for (const node of nodes) {
+          const text = normalizeText(node.textContent);
+          const match = text.match(/\d+/);
+          if (match) return Number.parseInt(match[0], 10);
+        }
+      } catch {
+        // Ignore invalid selectors.
+      }
+    }
+    return null;
+  };
+  const clickAgreement = () => {
+    if (!agreementTextPatterns.length) return false;
+
+    const checkboxCandidates = Array.from(document.querySelectorAll('input[type="checkbox"], [role="checkbox"]'));
+    for (const candidate of checkboxCandidates) {
+      if (!isVisible(candidate)) continue;
+      if (candidate.checked || candidate.getAttribute?.('aria-checked') === 'true') continue;
+      const container = candidate.closest('label, div, span') || candidate.parentElement || candidate;
+      const text = getElementText(container);
+      if (matchesAny(text, agreementTextPatterns)) {
+        candidate.click();
+        return true;
+      }
+    }
+
+    const buttonCandidates = Array.from(document.querySelectorAll('label, button, span, div'));
+    for (const candidate of buttonCandidates) {
+      if (!isVisible(candidate)) continue;
+      const text = getElementText(candidate);
+      if (!text || text.length > 120) continue;
+      if (matchesAny(text, agreementTextPatterns)) {
+        candidate.click();
+        return true;
+      }
+    }
+
+    return false;
+  };
+  const hasVisibleLoginGate = () => {
+    const modalSelectors = [
+      ...(Array.isArray(config?.loginGateSelectors) ? config.loginGateSelectors : []),
+      '.ant-modal',
+      '.ant-modal-content',
+      '.el-dialog',
+      '.el-overlay',
+      '.ivu-modal',
+      '.ivu-modal-content',
+      '.n-dialog',
+      '[class*="modal"]',
+      '[class*="dialog"]'
+    ];
+
+    for (const selector of modalSelectors) {
+      try {
+        const nodes = Array.from(document.querySelectorAll(selector));
+        for (const node of nodes) {
+          if (!isVisible(node)) continue;
+          if (matchesAny(getElementText(node), loginTextPatterns)) {
+            return true;
+          }
+        }
+      } catch {
+        // Ignore invalid selectors.
+      }
+    }
+
+    return false;
+  };
+  const findCandidateFromSelectors = () => {
+    for (const selector of selectors) {
+      try {
+        const nodes = Array.from(document.querySelectorAll(selector));
+        for (const node of nodes) {
+          if (!isVisible(node)) continue;
+          const text = getElementText(node);
+          if (addTextPatterns.length && text && !matchesAny(text, addTextPatterns)) continue;
+          const clickable = node.closest('button, a, [role="button"]') || node;
+          if (!isVisible(clickable) || isDisabled(clickable)) continue;
+          return { node: clickable, selector };
+        }
+      } catch {
+        // Ignore invalid selectors.
+      }
+    }
+    return null;
+  };
+  const findCandidateByText = () => {
+    const nodes = [
+      ...Array.from(document.querySelectorAll('button, a, [role="button"]')),
+      ...Array.from(document.querySelectorAll('span, div'))
+    ];
+    for (const node of nodes) {
+      if (!isVisible(node)) continue;
+      const text = getElementText(node);
+      if (!text || !matchesAny(text, addTextPatterns)) continue;
+      if (matchesAny(text, loginTextPatterns)) continue;
+      const descendant = node.matches('button, a, [role="button"]')
+        ? null
+        : Array.from(node.querySelectorAll('button, a, [role="button"]')).find((candidate) => {
+            if (!isVisible(candidate)) return false;
+            return matchesAny(getElementText(candidate), addTextPatterns);
+          });
+      const clickable = descendant || node.closest('button, a, [role="button"]') || node;
+      if (!isVisible(clickable) || isDisabled(clickable)) continue;
+      return { node: clickable, selector: 'text-match' };
+    }
+    return null;
+  };
+
+  if (matchesAny(bodyText, securityTextPatterns)) {
+    return { status: 'security_check' };
+  }
+  if (matchesAny(bodyText, failureTextPatterns)) {
+    return { status: 'blocked' };
+  }
+
+  clickAgreement();
+
+  const cartCountBefore = readCartCount();
+  const candidate = findCandidateFromSelectors() || findCandidateByText();
+  if (!candidate) {
+    return { status: hasVisibleLoginGate() ? 'login_required' : 'not_found', cartCountBefore };
+  }
+
+  if (isDisabled(candidate.node)) {
+    return { status: 'disabled', cartCountBefore };
+  }
+
+  candidate.node.scrollIntoView({ block: 'center', inline: 'center' });
+  candidate.node.click();
+
+  return {
+    status: 'clicked',
+    cartCountBefore,
+    selector: candidate.selector,
+    buttonText: getElementText(candidate.node)
+  };
+}
+
+function verifyAgentCheckoutState(config, clickResult) {
+  const successSelectors = Array.isArray(config?.successSelectors) ? config.successSelectors : [];
+  const confirmSelectors = Array.isArray(config?.confirmSelectors) ? config.confirmSelectors : [];
+  const loginGateSelectors = Array.isArray(config?.loginGateSelectors) ? config.loginGateSelectors : [];
+  const cartBadgeSelectors = Array.isArray(config?.cartBadgeSelectors) ? config.cartBadgeSelectors : [];
+  const loginTextPatterns = (Array.isArray(config?.loginTextPatterns) ? config.loginTextPatterns : [])
+    .map((pattern) => String(pattern).toLowerCase());
+  const failureTextPatterns = (Array.isArray(config?.failureTextPatterns) ? config.failureTextPatterns : [])
+    .map((pattern) => String(pattern).toLowerCase());
+  const securityTextPatterns = (Array.isArray(config?.securityTextPatterns) ? config.securityTextPatterns : [])
+    .map((pattern) => String(pattern).toLowerCase());
+  const successTextPatterns = (Array.isArray(config?.successTextPatterns) ? config.successTextPatterns : [])
+    .map((pattern) => String(pattern).toLowerCase());
+
+  const isVisible = (element) => !!(element && (element.offsetWidth || element.offsetHeight || element.getClientRects().length));
+  const normalizeText = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const getElementText = (element) => normalizeText(`${element?.innerText || element?.textContent || ''} ${element?.className || ''} ${element?.id || ''}`);
+  const matchesAny = (text, patterns) => patterns.some((pattern) => text.includes(pattern));
+  const bodyText = normalizeText(`${document.title || ''} ${document.body?.innerText || ''}`);
+  const strongSuccess = ['success', 'successfully', 'added', '加入', '已加入', '成功'];
+
+  const hasVisibleSelector = (selectors) => selectors.some((selector) => {
+    try {
+      return Array.from(document.querySelectorAll(selector)).some(isVisible);
+    } catch {
+      return false;
+    }
+  });
+  const clickVisibleConfirm = () => {
+    for (const selector of confirmSelectors) {
+      try {
+        const candidate = Array.from(document.querySelectorAll(selector)).find(isVisible);
+        if (candidate) {
+          candidate.click();
+          return true;
+        }
+      } catch {
+        // Ignore invalid selectors.
+      }
+    }
+    return false;
+  };
+  const hasVisibleLoginGate = () => {
+    if (hasVisibleSelector(loginGateSelectors)) return true;
+
+    const modalSelectors = [
+      '.ant-modal',
+      '.ant-modal-content',
+      '.el-dialog',
+      '.el-overlay',
+      '.ivu-modal',
+      '.ivu-modal-content',
+      '.n-dialog',
+      '[class*="modal"]',
+      '[class*="dialog"]'
+    ];
+
+    for (const selector of modalSelectors) {
+      try {
+        const nodes = Array.from(document.querySelectorAll(selector));
+        for (const node of nodes) {
+          if (!isVisible(node)) continue;
+          if (matchesAny(getElementText(node), loginTextPatterns)) {
+            return true;
+          }
+        }
+      } catch {
+        // Ignore invalid selectors.
+      }
+    }
+
+    return false;
+  };
+  const readCartCount = () => {
+    for (const selector of cartBadgeSelectors) {
+      try {
+        const nodes = Array.from(document.querySelectorAll(selector));
+        for (const node of nodes) {
+          const text = normalizeText(node.textContent);
+          const match = text.match(/\d+/);
+          if (match) return Number.parseInt(match[0], 10);
+        }
+      } catch {
+        // Ignore invalid selectors.
+      }
+    }
+    return null;
+  };
+  const getSuccessMatch = () => {
+    for (const selector of successSelectors) {
+      try {
+        const nodes = Array.from(document.querySelectorAll(selector));
+        for (const node of nodes) {
+          if (!isVisible(node)) continue;
+          const text = getElementText(node);
+          const classText = normalizeText(`${node.className || ''} ${node.id || ''}`);
+          if (classText.includes('success')) {
+            return { method: 'success_selector', text };
+          }
+          if (matchesAny(text, successTextPatterns) && strongSuccess.some((token) => text.includes(token.toLowerCase()))) {
+            return { method: 'success_text', text };
+          }
+        }
+      } catch {
+        // Ignore invalid selectors.
+      }
+    }
+    return null;
+  };
+
+  if (matchesAny(bodyText, securityTextPatterns)) {
+    return { status: 'security_check' };
+  }
+
+  if (hasVisibleLoginGate()) {
+    return { status: 'login_required' };
+  }
+
+  if (matchesAny(bodyText, failureTextPatterns)) {
+    return { status: 'blocked' };
+  }
+
+  const currentCartCount = readCartCount();
+  if (
+    Number.isFinite(clickResult?.cartCountBefore) &&
+    Number.isFinite(currentCartCount) &&
+    currentCartCount > clickResult.cartCountBefore
+  ) {
+    clickVisibleConfirm();
+    return { status: 'confirmed', reason: 'cart_count_increase' };
+  }
+
+  const successMatch = getSuccessMatch();
+  if (successMatch) {
+    clickVisibleConfirm();
+    return { status: 'confirmed', reason: successMatch.method };
+  }
+
+  return { status: 'waiting' };
+}
+
+async function waitForAgentPageReady(tabId, config) {
+  let lastResult = { status: 'not_ready' };
+
+  for (let attempt = 0; attempt < 15; attempt++) {
+    await sleep(attempt === 0 ? 2500 : 1500);
+    const result = await runScriptInTab(tabId, inspectAgentCheckoutPage, [config]);
+    if (result?.status) {
+      lastResult = result;
+    }
+
+    if (lastResult.status === 'ready') {
+      return lastResult;
+    }
+  }
+
+  return lastResult;
+}
+
+async function waitForCheckoutVerification(tabId, config, clickResult) {
+  let lastResult = { status: 'waiting' };
+
+  for (let attempt = 0; attempt < 12; attempt++) {
+    await sleep(750);
+    const result = await runScriptInTab(tabId, verifyAgentCheckoutState, [config, clickResult]);
+    if (result?.status) {
+      lastResult = result;
+    }
+
+    if (lastResult.status !== 'waiting') {
+      return lastResult;
+    }
+  }
+
+  return { status: 'unconfirmed' };
+}
+
+async function handleAgentCheckoutTab(agentId, tabUrl) {
+  const tab = await chrome.tabs.create({ url: tabUrl, active: false });
+
+  if (agentId === 'raw') {
+    return { success: true, tabId: tab.id, clicked: false, confirmed: false, reason: 'opened' };
+  }
+
+  const config = AGENT_CHECKOUT_CONFIG[agentId] || getAgentCheckoutConfig(agentId);
+  if (!config) {
+    return { success: false, tabId: tab.id, clicked: false, confirmed: false, reason: 'unknown_agent' };
+  }
+
+  await waitForTabComplete(tab.id);
+
+  const readyState = await waitForAgentPageReady(tab.id, config);
+  if (readyState.status !== 'ready') {
+    return {
+      success: true,
+      tabId: tab.id,
+      clicked: false,
+      confirmed: false,
+      reason: readyState.status === 'not_ready' ? 'unconfirmed' : readyState.status
+    };
+  }
+
+  const clickResult = await runScriptInTab(tab.id, clickAgentAddToCart, [config]) || { status: 'script_failed' };
+  if (clickResult.status !== 'clicked') {
+    return {
+      success: true,
+      tabId: tab.id,
+      clicked: false,
+      confirmed: false,
+      reason: clickResult.status === 'script_failed' ? 'unconfirmed' : clickResult.status
+    };
+  }
+
+  const verification = await waitForCheckoutVerification(tab.id, config, clickResult);
+  if (verification.status === 'confirmed') {
+    await sleep(500);
+    try {
+      await chrome.tabs.remove(tab.id);
+    } catch {
+      // Tab may already be closed by the site.
+    }
+
+    return {
+      success: true,
+      tabId: tab.id,
+      clicked: true,
+      confirmed: true,
+      reason: verification.reason || 'confirmed'
+    };
+  }
+
+  return {
+    success: true,
+    tabId: tab.id,
+    clicked: true,
+    confirmed: false,
+    reason: verification.status || 'unconfirmed'
+  };
+}
+
 // ── Badge ────────────────────────────────────────────────────
 function updateBadge(cart) {
   const count = cart.reduce((sum, i) => sum + i.quantity, 0);
@@ -534,6 +1091,51 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case 'resetCleanedNames': {
           const cart = await resetCleanedNames();
           sendResponse({ success: true, cart });
+          break;
+        }
+        case 'uploadCleanedNames': {
+          if (msg.data) {
+            try {
+              // Hardcoded Firebase Firestore REST API configuration
+              const PROJECT_ID = 'yucart-extension';
+              const API_KEY = 'AIzaSyB99EE4fClAhFlqrZk3G7nlLizIH1vXojg';
+              const COLLECTION = 'cleaned_names';
+              
+              const url = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${COLLECTION}?key=${API_KEY}`;
+              
+              const payload = {
+                fields: {
+                  originalName: { stringValue: msg.data.originalName || "Unknown" },
+                  cleanedName: { stringValue: msg.data.cleanedName || "Unknown" },
+                  storeLink: { stringValue: msg.data.storeLink || "" },
+                  productLink: { stringValue: msg.data.productLink || "" },
+                  vendor: { stringValue: msg.data.vendor || "Unknown" },
+                  color: msg.data.color ? { stringValue: msg.data.color } : { nullValue: null },
+                  itemType: msg.data.itemType ? { stringValue: msg.data.itemType } : { nullValue: null },
+                  timestamp: { timestampValue: new Date(msg.data.timestamp || Date.now()).toISOString() }
+                }
+              };
+
+              const resp = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+              });
+              
+              if (!resp.ok) {
+                const errorData = await resp.json().catch(() => ({}));
+                console.error('[YuCart BG] Firestore upload failed:', errorData);
+                sendResponse({ success: false, error: 'Firestore API Error: ' + (errorData.error?.message || resp.statusText) });
+              } else {
+                sendResponse({ success: true });
+              }
+            } catch (e) {
+              console.error('[YuCart BG] Firebase upload failed:', e);
+              sendResponse({ success: false, error: e.message });
+            }
+          } else {
+            sendResponse({ success: false, error: 'No data provided' });
+          }
           break;
         }
         case 'clearCart': {
@@ -650,170 +1252,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           break;
         }
         case 'agentCheckoutTab': {
-          const tabUrl = msg.url;
-          const selector = msg.addToCartSelector;
           try {
-            const tab = await chrome.tabs.create({ url: tabUrl, active: false });
-
-            // 1. Wait for tab to reach 'complete' status
-            await new Promise((resolve) => {
-              const timeout = setTimeout(() => {
-                chrome.tabs.onUpdated.removeListener(listener);
-                resolve();
-              }, 30000);
-              function listener(tabId, changeInfo) {
-                if (tabId === tab.id && changeInfo.status === 'complete') {
-                  chrome.tabs.onUpdated.removeListener(listener);
-                  clearTimeout(timeout);
-                  resolve();
-                }
-              }
-              chrome.tabs.onUpdated.addListener(listener);
-            });
-
-            if (!selector) {
-              sendResponse({ success: true, tabId: tab.id, clicked: false });
-              break;
-            }
-
-            // 2. Poll inside the page until button appears, click it, then verify
-            //    The injected function returns a result we can check.
-            const maxPolls = 8;
-            let clicked = false;
-
-            for (let attempt = 0; attempt < maxPolls; attempt++) {
-              // Wait before each attempt — gives SPA time to render
-              await new Promise(r => setTimeout(r, attempt === 0 ? 2500 : 2000));
-
-              try {
-                const results = await chrome.scripting.executeScript({
-                  target: { tabId: tab.id },
-                  func: (sel) => {
-                    const btn = document.querySelector(sel);
-                    if (!btn) return 'not_found';
-                    const style = window.getComputedStyle(btn);
-                    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
-                      return 'hidden';
-                    }
-                    if (btn.disabled) return 'disabled';
-                    btn.click();
-                    return 'clicked';
-                  },
-                  args: [selector]
-                });
-
-                const result = results?.[0]?.result;
-                if (result === 'clicked') {
-                  clicked = true;
-
-                  // 3. Wait for success confirmation modal/toast to appear
-                  //    Poll up to 10 times (500ms apart = 5s max)
-                  let confirmed = false;
-                  for (let v = 0; v < 10; v++) {
-                    await new Promise(r => setTimeout(r, 500));
-
-                    try {
-                      const verifyResults = await chrome.scripting.executeScript({
-                        target: { tabId: tab.id },
-                        func: () => {
-                          // Superbuy: ant-modal with success text + Confirm button
-                          const modal = document.querySelector('.ant-modal-content');
-                          if (modal) {
-                            const modalText = modal.textContent || '';
-                            if (modalText.includes('successfully') || modalText.includes('成功')) {
-                              const confirmBtn = modal.querySelector('.ant-btn-primary, .ant-modal-footer button');
-                              if (confirmBtn) confirmBtn.click();
-                              return 'confirmed_modal';
-                            }
-                          }
-
-                          // KakoBuy/Sugargoo: success toast or message
-                          const successEl = document.querySelector(
-                            '.el-message--success, .ant-message-success, ' +
-                            '.ivu-message-success, .toast-success, ' +
-                            '.alert-dialog-title'
-                          );
-                          if (successEl) {
-                            const text = successEl.textContent.toLowerCase();
-                            if (text.includes('success') || text.includes('cart') || text.includes('成功')) {
-                              // Try to dismiss any confirm button nearby
-                              const dismiss = document.querySelector(
-                                '.ant-btn-primary, .el-button--primary, ' +
-                                '.ivu-btn-primary, button.confirm'
-                              );
-                              if (dismiss) dismiss.click();
-                              return 'confirmed_toast';
-                            }
-                          }
-
-                          // Generic: check if cart badge count went up
-                          const cartBadge = document.querySelector(
-                            '.cart-count, .badge, [class*="cart-num"], ' +
-                            '[class*="cartNum"], .shopping-cart .num, ' +
-                            '.el-badge__content'
-                          );
-                          if (cartBadge && parseInt(cartBadge.textContent) > 0) {
-                            return 'confirmed_badge';
-                          }
-
-                          return 'waiting';
-                        }
-                      });
-
-                      const verification = verifyResults?.[0]?.result || 'waiting';
-                      if (verification !== 'waiting') {
-                        confirmed = true;
-                        console.log(`[YuCart BG] Confirmed: ${verification}`);
-                        break;
-                      }
-                    } catch { /* tab may have navigated, keep trying */ }
-                  }
-
-                  // If still unconfirmed after polling, try one more click
-                  if (!confirmed) {
-                    try {
-                      await chrome.scripting.executeScript({
-                        target: { tabId: tab.id },
-                        func: (sel) => {
-                          const btn = document.querySelector(sel);
-                          if (btn && !btn.disabled) btn.click();
-                        },
-                        args: [selector]
-                      });
-                      await new Promise(r => setTimeout(r, 2000));
-                      // Check once more for the modal
-                      await chrome.scripting.executeScript({
-                        target: { tabId: tab.id },
-                        func: () => {
-                          const modal = document.querySelector('.ant-modal-content');
-                          if (modal) {
-                            const confirmBtn = modal.querySelector('.ant-btn-primary, .ant-modal-footer button');
-                            if (confirmBtn) confirmBtn.click();
-                          }
-                        }
-                      });
-                    } catch { /* ignore */ }
-                  }
-
-                  // 4. Close the tab — we're done with this product
-                  await new Promise(r => setTimeout(r, 500));
-                  try {
-                    await chrome.tabs.remove(tab.id);
-                  } catch { /* tab may already be closed */ }
-
-                  break;
-                }
-
-                // 'not_found' or 'hidden' — keep polling
-                if (result === 'disabled') {
-                  continue;
-                }
-              } catch (scriptErr) {
-                console.warn(`[YuCart BG] Script attempt ${attempt + 1} failed:`, scriptErr.message);
-              }
-            }
-
-            sendResponse({ success: true, tabId: tab.id, clicked });
+            const response = await handleAgentCheckoutTab(msg.agentId, msg.url);
+            sendResponse(response);
           } catch (tabErr) {
             console.error('[YuCart BG] Failed to open tab:', tabErr);
             sendResponse({ success: false, error: tabErr.message });

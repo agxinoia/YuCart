@@ -22,6 +22,7 @@
     --border-accent: rgba(233, 69, 96, 0.25);
     --radius: 10px;
     --radius-sm: 6px;
+    --popup-scale: 1;
 }
 
 * {
@@ -41,6 +42,7 @@ body {
     background: var(--bg-primary);
     scrollbar-width: thin;
     scrollbar-color: var(--bg-card) transparent;
+    zoom: var(--popup-scale);
 }
 
 body::-webkit-scrollbar {

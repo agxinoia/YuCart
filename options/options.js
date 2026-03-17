@@ -3,6 +3,9 @@
    ============================================================ */
 
 const SETTINGS_KEY = 'yucart_settings';
+const DEFAULT_POPUP_SCALE = 1;
+const POPUP_SCALE_MIN = 0.8;
+const POPUP_SCALE_MAX = 1.25;
 const SUPPORT_AFFILIATE_LINKS = {
     superbuy: {
         name: 'Superbuy',
@@ -43,10 +46,32 @@ const SUPPORT_AFFILIATE_LINKS = {
 
 document.addEventListener('DOMContentLoaded', init);
 
+function normalizePopupScale(value) {
+    const numeric = Number.parseFloat(value);
+    if (!Number.isFinite(numeric)) return DEFAULT_POPUP_SCALE;
+    return Math.min(POPUP_SCALE_MAX, Math.max(POPUP_SCALE_MIN, Math.round(numeric * 100) / 100));
+}
+
+function popupScaleToPercent(value) {
+    return Math.round(normalizePopupScale(value) * 100);
+}
+
+function updatePopupScaleValue(percent) {
+    const scaleValue = document.getElementById('popupScaleValue');
+    if (scaleValue) {
+        scaleValue.textContent = `${percent}%`;
+    }
+}
+
 async function init() {
     // Load settings
     const result = await chrome.storage.sync.get(SETTINGS_KEY);
-    const settings = result[SETTINGS_KEY] || { targetCurrency: 'USD', darkMode: true, betaWardrobeEnabled: false };
+    const settings = result[SETTINGS_KEY] || {
+        targetCurrency: 'USD',
+        darkMode: true,
+        betaWardrobeEnabled: false,
+        popupScale: DEFAULT_POPUP_SCALE
+    };
 
     // Set currency dropdown
     const currencySelect = document.getElementById('currency');
@@ -56,6 +81,12 @@ async function init() {
     const agentSelect = document.getElementById('selectedAgent');
     agentSelect.value = settings.selectedAgent || 'superbuy';
 
+    // Set popup scale
+    const popupScaleInput = document.getElementById('popupScale');
+    const popupScalePercent = popupScaleToPercent(settings.popupScale);
+    popupScaleInput.value = String(popupScalePercent);
+    updatePopupScaleValue(popupScalePercent);
+
     // Set dark mode checkbox
     const darkModeCheckbox = document.getElementById('darkMode');
     darkModeCheckbox.checked = settings.darkMode !== false; // default true
@@ -63,6 +94,7 @@ async function init() {
     // Set beta wardrobe toggle
     const betaWardrobeCheckbox = document.getElementById('betaWardrobeEnabled');
     betaWardrobeCheckbox.checked = settings.betaWardrobeEnabled === true;
+    updateGoogleCalendarVisibility(betaWardrobeCheckbox.checked);
 
     // Set AI provider and API key
     const providerSelect = document.getElementById('aiProvider');
@@ -72,13 +104,16 @@ async function init() {
         apiKeyInput.value = settings.aiApiKey;
     }
 
+
     renderSupportAffiliateLink(agentSelect.value);
 
     // Load current rate
     loadRate(settings.targetCurrency);
 
     // Check Google Calendar status
-    checkGcalStatus();
+    if (betaWardrobeCheckbox.checked) {
+        checkGcalStatus();
+    }
 
     // Event listeners
     document.getElementById('saveBtn').addEventListener('click', save);
@@ -89,6 +124,15 @@ async function init() {
     });
     agentSelect.addEventListener('change', () => {
         renderSupportAffiliateLink(agentSelect.value);
+    });
+    popupScaleInput.addEventListener('input', () => {
+        updatePopupScaleValue(Number(popupScaleInput.value));
+    });
+    betaWardrobeCheckbox.addEventListener('change', () => {
+        updateGoogleCalendarVisibility(betaWardrobeCheckbox.checked);
+        if (betaWardrobeCheckbox.checked) {
+            checkGcalStatus();
+        }
     });
 }
 
@@ -145,10 +189,10 @@ async function save() {
         ...existingSettings,
         targetCurrency: document.getElementById('currency').value,
         selectedAgent: document.getElementById('selectedAgent').value,
+        popupScale: normalizePopupScale(Number(document.getElementById('popupScale').value) / 100),
         darkMode: document.getElementById('darkMode').checked,
         betaWardrobeEnabled: document.getElementById('betaWardrobeEnabled').checked,
         aiProvider: document.getElementById('aiProvider').value,
-        // Only update API key if user entered something (preserve existing if empty)
         aiApiKey: apiKey || existingSettings.aiApiKey || ''
     };
 
@@ -203,6 +247,12 @@ function escapeHtml(str) {
 }
 
 // ── Google Calendar ────────────────────────────────────────────
+function updateGoogleCalendarVisibility(isEnabled) {
+    const section = document.getElementById('googleCalendarSection');
+    if (!section) return;
+    section.hidden = !isEnabled;
+}
+
 function checkGcalStatus() {
     const statusEl = document.getElementById('gcalStatus');
     const btn = document.getElementById('gcalSyncBtn');

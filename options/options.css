@@ -117,6 +117,12 @@ body {
     letter-spacing: 0.5px;
 }
 
+.field__hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.5;
+}
+
 .field select {
     appearance: none;
     -webkit-appearance: none;
@@ -171,6 +177,26 @@ body {
 
 .field input[type="password"]::placeholder {
     color: var(--text-muted);
+}
+
+.range-control {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.range-control input[type="range"] {
+    flex: 1;
+    accent-color: var(--accent);
+}
+
+.range-control__value {
+    min-width: 48px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--teal);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
 }
 
 /* ── Google Calendar Sync ────────────────────────────────────── */

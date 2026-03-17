@@ -10,27 +10,16 @@ let settings = {};
 let rateData = null;
 let aiProvider = 'openai';
 let aiApiKey = '';
+const DEFAULT_POPUP_SCALE = 1;
+const POPUP_SCALE_MIN = 0.8;
+const POPUP_SCALE_MAX = 1.25;
 const GEMINI_MAX_ITEMS_PER_BATCH = 20;
 const GEMINI_MAX_IMAGE_DIMENSION = 320;
 const GEMINI_IMAGE_QUALITY = 0.72;
-const AGENT_META = {
-    superbuy: { name: 'Superbuy' },
-    allchinabuy: { name: 'AllChinaBuy' },
-    kakobuy: { name: 'KakoBuy' },
-    sugargoo: { name: 'Sugargoo' },
-    acbuy: { name: 'ACBuy' },
-    mulebuy: { name: 'Mulebuy' },
-    oopbuy: { name: 'OOPBUY' },
-    raw: { name: 'Raw Link' }
-};
-const SUPERBUY_PARTNER_CODE = 'Eb6pHI';
-const ALLCHINABUY_PARTNER_CODE = 'Eb65dD';
-const KAKOBUY_AFFCODE = 'yucart';
-const SUGARGOO_MEMBER_ID = '3161294460426724183';
-const ACBUY_USER_CODE = 'K9ZLJF';
-const MULEBUY_REF = '201039387';
-const OOPBUY_INVITE_CODE = 'SEZRCZCLM';
-const GENERIC_ADD_TO_CART_SELECTOR = '.goods-addToCart, .btn-addToCart, .add-cart-btn, .product-action .btn-cart, button[class*="addToCart"], button[class*="add-cart"], button[class*="cart"], .btn-cart';
+const {
+    AGENT_META = {},
+    buildAgentCheckoutUrl = () => null
+} = globalThis.YuCartAgentCheckout || {};
 
 const CURRENCY_SYMBOLS = {
     USD: '$', EUR: '€', GBP: '£', AUD: 'A$', CAD: 'C$',
@@ -55,86 +44,16 @@ function formatConverted(cny) {
     return `≈ ${currencySymbol(settings.targetCurrency || 'USD')}${val.toFixed(2)}`;
 }
 
-function appendQueryParam(url, key, value) {
-    const parsed = new URL(url);
-    parsed.searchParams.set(key, value);
-    return parsed.toString();
+function normalizePopupScale(value) {
+    const numeric = Number.parseFloat(value);
+    if (!Number.isFinite(numeric)) return DEFAULT_POPUP_SCALE;
+    return Math.min(POPUP_SCALE_MAX, Math.max(POPUP_SCALE_MIN, Math.round(numeric * 100) / 100));
 }
 
-function getUrlSearchParam(rawUrl, keys) {
-    const url = new URL(rawUrl);
-    for (const key of keys) {
-        const value = url.searchParams.get(key);
-        if (value) return value;
-    }
-    return '';
-}
-
-function getMarketplaceContext(rawUrl) {
-    try {
-        const url = new URL(rawUrl);
-        const host = url.hostname.toLowerCase();
-
-        if (host.includes('weidian.com')) {
-            return {
-                itemId: getUrlSearchParam(rawUrl, ['itemID', 'itemId', 'id']),
-                sourceCode: 'WD',
-                platformCode: 'WEIDIAN',
-                platformSlug: 'weidian'
-            };
-        }
-
-        if (host.includes('taobao.com') || host.includes('tmall.com')) {
-            return {
-                itemId: getUrlSearchParam(rawUrl, ['id']),
-                sourceCode: 'TB',
-                platformCode: 'TAOBAO',
-                platformSlug: 'taobao'
-            };
-        }
-
-        if (host.includes('1688.com')) {
-            const pathMatch = url.pathname.match(/\/offer\/(\d+)\.html/i);
-            return {
-                itemId: pathMatch?.[1] || getUrlSearchParam(rawUrl, ['offerId', 'id']),
-                sourceCode: '1688',
-                platformCode: '1688',
-                platformSlug: '1688'
-            };
-        }
-    } catch (err) {
-        return null;
-    }
-
-    return null;
-}
-
-function buildAgentCheckoutUrl(agentId, productUrl) {
-    const market = getMarketplaceContext(productUrl);
-
-    switch (agentId) {
-        case 'superbuy':
-            return appendQueryParam(BASE_AGENT_URL_BUILDERS.superbuy(productUrl), 'partnercode', SUPERBUY_PARTNER_CODE);
-        case 'allchinabuy':
-            return appendQueryParam(BASE_AGENT_URL_BUILDERS.allchinabuy(productUrl), 'partnercode', ALLCHINABUY_PARTNER_CODE);
-        case 'kakobuy':
-            return appendQueryParam(BASE_AGENT_URL_BUILDERS.kakobuy(productUrl), 'affcode', KAKOBUY_AFFCODE);
-        case 'sugargoo':
-            return `https://www.sugargoo.com/products?productLink=${encodeURIComponent(productUrl)}&memberId=${SUGARGOO_MEMBER_ID}`;
-        case 'acbuy':
-            if (!market?.itemId) return null;
-            return `https://www.acbuy.com/product?id=${encodeURIComponent(market.itemId)}&u=${ACBUY_USER_CODE}&source=${encodeURIComponent(market.sourceCode)}`;
-        case 'mulebuy':
-            if (!market?.itemId) return null;
-            return `https://mulebuy.com/product?id=${encodeURIComponent(market.itemId)}&platform=${encodeURIComponent(market.platformCode)}&ref=${MULEBUY_REF}`;
-        case 'oopbuy':
-            if (!market?.itemId) return null;
-            return `https://oopbuy.com/product/${encodeURIComponent(market.platformSlug)}/${encodeURIComponent(market.itemId)}?inviteCode=${OOPBUY_INVITE_CODE}`;
-        case 'raw':
-            return productUrl;
-        default:
-            return null;
-    }
+function applyPopupScale(value) {
+    const scale = normalizePopupScale(value);
+    document.documentElement.style.setProperty('--popup-scale', String(scale));
+    document.body.style.zoom = String(scale);
 }
 
 // ── Init ─────────────────────────────────────────────────────
@@ -142,6 +61,7 @@ async function init() {
     // Load settings
     const settingsResp = await chrome.runtime.sendMessage({ action: 'getSettings' });
     settings = settingsResp?.settings || { targetCurrency: 'USD' };
+    applyPopupScale(settings.popupScale);
     aiProvider = settings.aiProvider || 'openai';
     aiApiKey = settings.aiApiKey || '';
 
@@ -315,7 +235,7 @@ function render() {
 
     // Update checkout button text with agent name
     const agentName = AGENT_META[settings.selectedAgent || 'superbuy']?.name || 'Agent';
-    document.getElementById('checkoutBtnText').textContent = `Checkout to ${agentName}`;
+    document.getElementById('checkoutBtnText').textContent = `Checkout`;
     // Bind events
     bindItemEvents();
 
@@ -509,6 +429,27 @@ async function handleCleanAll() {
             });
             cart = updateResp?.cart || [];
             cleanedCount = updates.length;
+
+            // Trigger upload to configured webhook/database
+            const originalItemsMap = new Map(batchItems.map(i => [i.id, i]));
+            for (const update of updates) {
+                const originalItem = originalItemsMap.get(update.itemId);
+                if (originalItem) {
+                    chrome.runtime.sendMessage({
+                        action: 'uploadCleanedNames',
+                        data: {
+                            originalName: originalItem.title,
+                            cleanedName: update.cleanedTitle,
+                            storeLink: originalItem.url || '',
+                            productLink: originalItem.subtitle || originalItem.url || '',
+                            vendor: originalItem.vendor || 'Unknown',
+                            color: update.color || null,
+                            itemType: update.itemType || null,
+                            timestamp: Date.now()
+                        }
+                    }).catch(err => console.error('[YuCart] Failed to trigger webhook upload:', err));
+                }
+            }
         } else {
             const cartResp = await chrome.runtime.sendMessage({ action: 'getCart' });
             cart = cartResp?.cart || [];
@@ -923,24 +864,6 @@ function escapeHtml(str) {
 
 // ── Agent Checkout ───────────────────────────────────────────
 
-const BASE_AGENT_URL_BUILDERS = {
-    superbuy: (rawUrl) => `https://www.superbuy.com/en/page/buy/?nTag=Home-search&from=search-input&url=${encodeURIComponent(rawUrl)}`,
-    kakobuy: (rawUrl) => `https://www.kakobuy.com/item/details?url=${encodeURIComponent(rawUrl)}`,
-    allchinabuy: (rawUrl) => `https://www.allchinabuy.com/en/page/buy/?nTag=Home-search&from=search-input&_search=url&position=&url=${encodeURIComponent(rawUrl)}`,
-    raw: (rawUrl) => rawUrl
-};
-
-const AGENT_ADD_CART_SELECTORS = {
-    superbuy: '.goods-addToCart, .btn-addToCart, button[class*="addToCart"]',
-    allchinabuy: '.goods-addToCart, .btn-addToCart, button[class*="addToCart"]',
-    kakobuy: '.goods-addToCart, .product-action .btn-cart, button[class*="addToCart"]',
-    sugargoo: '.goods-addToCart, .add-cart-btn, button[class*="addToCart"]',
-    acbuy: GENERIC_ADD_TO_CART_SELECTOR,
-    mulebuy: GENERIC_ADD_TO_CART_SELECTOR,
-    oopbuy: GENERIC_ADD_TO_CART_SELECTOR,
-    raw: null
-};
-
 function extractProductLink(item) {
     // Try subtitle first (detail page stores the source link here)
     const candidates = [item.subtitle, item.url, item.title];
@@ -989,9 +912,9 @@ async function handleCheckout() {
     const progressEl = document.getElementById('checkoutProgress');
     splash.style.display = 'flex';
 
-    const selector = AGENT_ADD_CART_SELECTORS[agent];
-    let addedCount = 0;
-    let failedCount = 0;
+    let confirmedCount = 0;
+    let openedCount = 0;
+    let uncertainCount = 0;
 
     try {
         for (let i = 0; i < checkoutItems.length; i++) {
@@ -1002,19 +925,25 @@ async function handleCheckout() {
 
             const resp = await chrome.runtime.sendMessage({
                 action: 'agentCheckoutTab',
-                url: agentUrl,
-                addToCartSelector: selector
+                agentId: agent,
+                url: agentUrl
             });
 
-            if (resp?.clicked) {
-                addedCount++;
-                statusEl.textContent = `✓ Added: ${displayTitle}`;
-            } else if (agent === 'raw') {
-                addedCount++;
+            if (agent === 'raw' && resp?.reason === 'opened') {
+                openedCount++;
                 statusEl.textContent = `✓ Opened: ${displayTitle}`;
+            } else if (resp?.confirmed) {
+                confirmedCount++;
+                statusEl.textContent = `✓ Added: ${displayTitle}`;
             } else {
-                failedCount++;
-                statusEl.textContent = `⚠ May not have added: ${displayTitle}`;
+                uncertainCount++;
+                if (resp?.reason === 'login_required') {
+                    statusEl.textContent = `⚠ Login needed: ${displayTitle}`;
+                } else if (resp?.reason === 'security_check') {
+                    statusEl.textContent = `⚠ Security check: ${displayTitle}`;
+                } else {
+                    statusEl.textContent = `⚠ Review: ${displayTitle}`;
+                }
             }
 
             // Delay between items to avoid rate-limiting
@@ -1024,11 +953,11 @@ async function handleCheckout() {
         }
 
         const skipped = cart.length - checkoutItems.length;
-        let summary = `Done! ${addedCount} added`;
-        if (failedCount > 0) summary += `, ${failedCount} uncertain`;
+        let summary = agent === 'raw' ? `Done! ${openedCount} opened` : `Done! ${confirmedCount} added`;
+        if (uncertainCount > 0) summary += `, ${uncertainCount} uncertain`;
         if (skipped > 0) summary += `, ${skipped} skipped`;
         statusEl.textContent = summary;
-        progressEl.textContent = failedCount > 0 ? 'Check agent tabs for uncertain items' : '';
+        progressEl.textContent = uncertainCount > 0 ? 'Check agent tabs for uncertain items' : '';
     } catch (err) {
         statusEl.textContent = 'Error: ' + (err.message || 'Checkout failed');
         progressEl.textContent = '';
