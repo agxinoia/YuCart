@@ -917,47 +917,76 @@ async function handleCheckout() {
     let uncertainCount = 0;
 
     try {
-        for (let i = 0; i < checkoutItems.length; i++) {
-            const { item, agentUrl } = checkoutItems[i];
-            const displayTitle = (item.cleanedTitle || item.title).slice(0, 40);
-            statusEl.textContent = `Opening: ${displayTitle}...`;
-            progressEl.textContent = `${i + 1} of ${checkoutItems.length}`;
+        if (settings.betaAutoCheckoutEnabled) {
+            for (let i = 0; i < checkoutItems.length; i++) {
+                const { item, agentUrl } = checkoutItems[i];
+                const displayTitle = (item.cleanedTitle || item.title).slice(0, 40);
+                statusEl.textContent = `Opening: ${displayTitle}...`;
+                progressEl.textContent = `${i + 1} of ${checkoutItems.length}`;
 
-            const resp = await chrome.runtime.sendMessage({
-                action: 'agentCheckoutTab',
-                agentId: agent,
-                url: agentUrl
-            });
+                const resp = await chrome.runtime.sendMessage({
+                    action: 'agentCheckoutTab',
+                    agentId: agent,
+                    url: agentUrl
+                });
 
-            if (agent === 'raw' && resp?.reason === 'opened') {
-                openedCount++;
-                statusEl.textContent = `✓ Opened: ${displayTitle}`;
-            } else if (resp?.confirmed) {
-                confirmedCount++;
-                statusEl.textContent = `✓ Added: ${displayTitle}`;
-            } else {
-                uncertainCount++;
-                if (resp?.reason === 'login_required') {
-                    statusEl.textContent = `⚠ Login needed: ${displayTitle}`;
-                } else if (resp?.reason === 'security_check') {
-                    statusEl.textContent = `⚠ Security check: ${displayTitle}`;
+                if (agent === 'raw' && resp?.reason === 'opened') {
+                    openedCount++;
+                    statusEl.textContent = `✓ Opened: ${displayTitle}`;
+                } else if (resp?.confirmed) {
+                    confirmedCount++;
+                    statusEl.textContent = `✓ Added: ${displayTitle}`;
                 } else {
-                    statusEl.textContent = `⚠ Review: ${displayTitle}`;
+                    uncertainCount++;
+                    if (resp?.reason === 'login_required') {
+                        statusEl.textContent = `⚠ Login needed: ${displayTitle}`;
+                    } else if (resp?.reason === 'security_check') {
+                        statusEl.textContent = `⚠ Security check: ${displayTitle}`;
+                    } else {
+                        statusEl.textContent = `⚠ Review: ${displayTitle}`;
+                    }
+                }
+
+                // Delay between items to avoid rate-limiting
+                if (i < checkoutItems.length - 1) {
+                    await new Promise(r => setTimeout(r, 1000));
                 }
             }
 
-            // Delay between items to avoid rate-limiting
-            if (i < checkoutItems.length - 1) {
-                await new Promise(r => setTimeout(r, 1000));
+            const skipped = cart.length - checkoutItems.length;
+            let summary = agent === 'raw' ? `Done! ${openedCount} opened` : `Done! ${confirmedCount} added`;
+            if (uncertainCount > 0) summary += `, ${uncertainCount} uncertain`;
+            if (skipped > 0) summary += `, ${skipped} skipped`;
+            statusEl.textContent = summary;
+            progressEl.textContent = uncertainCount > 0 ? 'Check agent tabs for uncertain items' : '';
+        } else {
+            const newTabIds = [];
+            for (let i = 0; i < checkoutItems.length; i++) {
+                const { item, agentUrl } = checkoutItems[i];
+                const displayTitle = (item.cleanedTitle || item.title).slice(0, 40);
+                statusEl.textContent = `Opening: ${displayTitle}...`;
+                progressEl.textContent = `${i + 1} of ${checkoutItems.length}`;
+                
+                const tab = await chrome.tabs.create({ url: agentUrl, active: false });
+                if (tab && tab.id) {
+                    newTabIds.push(tab.id);
+                }
+                openedCount++;
             }
+            if (newTabIds.length > 0 && chrome.tabs.group) {
+                try {
+                    const groupId = await chrome.tabs.group({ tabIds: newTabIds });
+                    await chrome.tabGroups.update(groupId, { title: 'YuCart Checkout', color: 'blue' });
+                } catch (err) {
+                    console.log('Failed to group tabs:', err);
+                }
+            }
+            const skipped = cart.length - checkoutItems.length;
+            let summary = `Done! ${openedCount} opened`;
+            if (skipped > 0) summary += `, ${skipped} skipped`;
+            statusEl.textContent = summary;
+            progressEl.textContent = '';
         }
-
-        const skipped = cart.length - checkoutItems.length;
-        let summary = agent === 'raw' ? `Done! ${openedCount} opened` : `Done! ${confirmedCount} added`;
-        if (uncertainCount > 0) summary += `, ${uncertainCount} uncertain`;
-        if (skipped > 0) summary += `, ${skipped} skipped`;
-        statusEl.textContent = summary;
-        progressEl.textContent = uncertainCount > 0 ? 'Check agent tabs for uncertain items' : '';
     } catch (err) {
         statusEl.textContent = 'Error: ' + (err.message || 'Checkout failed');
         progressEl.textContent = '';

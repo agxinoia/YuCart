@@ -1,5 +1,5 @@
 # YuCart — Yupoo Shopping Cart
-
+https://hotdog-official.x.yupoo.com/albums
 ![Version](https://img.shields.io/badge/version-2.0-blue.svg)
 
 A Chrome extension that enhances the shopping experience on Yupoo for international fashion shoppers. Built for the FashionReps community and anyone who browses Yupoo stores and purchases through shopping agents like Superbuy, AllChinaBuy, KakoBuy, Sugargoo, ACBuy, Mulebuy, and OOPBUY.

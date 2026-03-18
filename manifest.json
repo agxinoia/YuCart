@@ -15,7 +15,8 @@
     "declarativeNetRequest",
     "alarms",
     "scripting",
-    "identity"
+    "identity",
+    "tabGroups"
   ],
   "host_permissions": [
     "https://open.er-api.com/*",

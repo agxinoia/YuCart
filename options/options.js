@@ -70,6 +70,7 @@ async function init() {
         targetCurrency: 'USD',
         darkMode: true,
         betaWardrobeEnabled: false,
+        betaAutoCheckoutEnabled: false,
         popupScale: DEFAULT_POPUP_SCALE
     };
 
@@ -95,6 +96,11 @@ async function init() {
     const betaWardrobeCheckbox = document.getElementById('betaWardrobeEnabled');
     betaWardrobeCheckbox.checked = settings.betaWardrobeEnabled === true;
     updateGoogleCalendarVisibility(betaWardrobeCheckbox.checked);
+
+    const betaAutoCheckoutCheckbox = document.getElementById('betaAutoCheckoutEnabled');
+    if (betaAutoCheckoutCheckbox) {
+        betaAutoCheckoutCheckbox.checked = settings.betaAutoCheckoutEnabled === true;
+    }
 
     // Set AI provider and API key
     const providerSelect = document.getElementById('aiProvider');
@@ -192,6 +198,7 @@ async function save() {
         popupScale: normalizePopupScale(Number(document.getElementById('popupScale').value) / 100),
         darkMode: document.getElementById('darkMode').checked,
         betaWardrobeEnabled: document.getElementById('betaWardrobeEnabled').checked,
+        betaAutoCheckoutEnabled: document.getElementById('betaAutoCheckoutEnabled') ? document.getElementById('betaAutoCheckoutEnabled').checked : false,
         aiProvider: document.getElementById('aiProvider').value,
         aiApiKey: apiKey || existingSettings.aiApiKey || ''
     };
