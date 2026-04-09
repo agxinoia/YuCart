@@ -3,6 +3,7 @@
    ============================================================ */
 
 const SETTINGS_KEY = 'yucart_settings';
+const LOCAL_SETTINGS_KEY = 'yucart_local_settings';
 const DEFAULT_POPUP_SCALE = 1;
 const POPUP_SCALE_MIN = 0.8;
 const POPUP_SCALE_MAX = 1.25;
@@ -65,13 +66,18 @@ function updatePopupScaleValue(percent) {
 
 async function init() {
     // Load settings
-    const result = await chrome.storage.sync.get(SETTINGS_KEY);
-    const settings = result[SETTINGS_KEY] || {
+    const [syncResult, localResult] = await Promise.all([
+        chrome.storage.sync.get(SETTINGS_KEY),
+        chrome.storage.local.get(LOCAL_SETTINGS_KEY)
+    ]);
+    const settings = {
         targetCurrency: 'USD',
         darkMode: true,
         betaWardrobeEnabled: false,
         betaAutoCheckoutEnabled: false,
-        popupScale: DEFAULT_POPUP_SCALE
+        popupScale: DEFAULT_POPUP_SCALE,
+        ...(syncResult[SETTINGS_KEY] || {}),
+        ...(localResult[LOCAL_SETTINGS_KEY] || {})
     };
 
     // Set currency dropdown
@@ -95,8 +101,6 @@ async function init() {
     // Set beta wardrobe toggle
     const betaWardrobeCheckbox = document.getElementById('betaWardrobeEnabled');
     betaWardrobeCheckbox.checked = settings.betaWardrobeEnabled === true;
-    updateGoogleCalendarVisibility(betaWardrobeCheckbox.checked);
-
     const betaAutoCheckoutCheckbox = document.getElementById('betaAutoCheckoutEnabled');
     if (betaAutoCheckoutCheckbox) {
         betaAutoCheckoutCheckbox.checked = settings.betaAutoCheckoutEnabled === true;
@@ -109,22 +113,14 @@ async function init() {
     if (settings.aiApiKey) {
         apiKeyInput.value = settings.aiApiKey;
     }
-
-
     renderSupportAffiliateLink(agentSelect.value);
 
     // Load current rate
     loadRate(settings.targetCurrency);
 
-    // Check Google Calendar status
-    if (betaWardrobeCheckbox.checked) {
-        checkGcalStatus();
-    }
-
     // Event listeners
     document.getElementById('saveBtn').addEventListener('click', save);
     document.getElementById('refreshRate').addEventListener('click', refreshRate);
-    document.getElementById('gcalSyncBtn').addEventListener('click', syncGoogleCalendar);
     currencySelect.addEventListener('change', () => {
         loadRate(currencySelect.value);
     });
@@ -133,12 +129,6 @@ async function init() {
     });
     popupScaleInput.addEventListener('input', () => {
         updatePopupScaleValue(Number(popupScaleInput.value));
-    });
-    betaWardrobeCheckbox.addEventListener('change', () => {
-        updateGoogleCalendarVisibility(betaWardrobeCheckbox.checked);
-        if (betaWardrobeCheckbox.checked) {
-            checkGcalStatus();
-        }
     });
 }
 
@@ -184,13 +174,16 @@ async function refreshRate() {
 }
 
 async function save() {
-    // Load existing settings first to preserve API key if field appears empty (masked)
-    const result = await chrome.storage.sync.get(SETTINGS_KEY);
-    const existingSettings = result[SETTINGS_KEY] || {};
-    
+    const [syncResult, localResult] = await Promise.all([
+        chrome.storage.sync.get(SETTINGS_KEY),
+        chrome.storage.local.get(LOCAL_SETTINGS_KEY)
+    ]);
+    const existingSettings = syncResult[SETTINGS_KEY] || {};
+    const existingLocalSettings = localResult[LOCAL_SETTINGS_KEY] || {};
+
     const apiKeyInput = document.getElementById('aiApiKey');
     const apiKey = apiKeyInput.value.trim();
-    
+
     const settings = {
         ...existingSettings,
         targetCurrency: document.getElementById('currency').value,
@@ -199,11 +192,20 @@ async function save() {
         darkMode: document.getElementById('darkMode').checked,
         betaWardrobeEnabled: document.getElementById('betaWardrobeEnabled').checked,
         betaAutoCheckoutEnabled: document.getElementById('betaAutoCheckoutEnabled') ? document.getElementById('betaAutoCheckoutEnabled').checked : false,
-        aiProvider: document.getElementById('aiProvider').value,
-        aiApiKey: apiKey || existingSettings.aiApiKey || ''
+        aiProvider: document.getElementById('aiProvider').value
     };
 
-    await chrome.storage.sync.set({ [SETTINGS_KEY]: settings });
+    delete settings.aiApiKey;
+
+    const localSettings = {
+        ...existingLocalSettings,
+        aiApiKey: apiKey || existingLocalSettings.aiApiKey || existingSettings.aiApiKey || ''
+    };
+
+    await Promise.all([
+        chrome.storage.sync.set({ [SETTINGS_KEY]: settings }),
+        chrome.storage.local.set({ [LOCAL_SETTINGS_KEY]: localSettings })
+    ]);
 
     // Show saved status
     const status = document.getElementById('saveStatus');
@@ -251,64 +253,6 @@ const _escapeRe = /[&<>"']/g;
 function escapeHtml(str) {
     if (!str) return '';
     return String(str).replace(_escapeRe, c => _escapeMap[c]);
-}
-
-// ── Google Calendar ────────────────────────────────────────────
-function updateGoogleCalendarVisibility(isEnabled) {
-    const section = document.getElementById('googleCalendarSection');
-    if (!section) return;
-    section.hidden = !isEnabled;
-}
-
-function checkGcalStatus() {
-    const statusEl = document.getElementById('gcalStatus');
-    const btn = document.getElementById('gcalSyncBtn');
-
-    try {
-        chrome.identity.getAuthToken({ interactive: false }, (token) => {
-            if (chrome.runtime.lastError || !token) {
-                statusEl.textContent = 'Not connected';
-                statusEl.style.color = '';
-                btn.textContent = 'Sync Calendar';
-            } else {
-                statusEl.textContent = 'Connected';
-                statusEl.style.color = '#2ecc71';
-                btn.textContent = 'Re-sync';
-            }
-        });
-    } catch {
-        statusEl.textContent = 'Not available';
-    }
-}
-
-async function syncGoogleCalendar() {
-    const statusEl = document.getElementById('gcalStatus');
-    const btn = document.getElementById('gcalSyncBtn');
-    btn.textContent = 'Connecting...';
-    btn.disabled = true;
-
-    try {
-        const token = await new Promise((resolve, reject) => {
-            chrome.identity.getAuthToken({ interactive: true }, (token) => {
-                if (chrome.runtime.lastError) {
-                    reject(new Error(chrome.runtime.lastError.message));
-                } else {
-                    resolve(token);
-                }
-            });
-        });
-
-        statusEl.textContent = 'Connected';
-        statusEl.style.color = '#2ecc71';
-        btn.textContent = 'Re-sync';
-        btn.disabled = false;
-    } catch (err) {
-        console.error('[YuCart] Google Calendar sync failed:', err);
-        statusEl.textContent = 'Failed — try again';
-        statusEl.style.color = '#e94560';
-        btn.textContent = 'Sync Calendar';
-        btn.disabled = false;
-    }
 }
 
 function timeSince(timestamp) {

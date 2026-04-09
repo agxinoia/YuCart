@@ -1,21 +1,18 @@
 {
   "manifest_version": 3,
   "name": "YuCart — Yupoo Shopping Cart",
-  "version": "2.0",
-  "description": "Shopping cart for Yupoo",
+  "version": "2.2",
+  "description": "Shopping cart for Yupoo. Checkout links use affiliate programs.",
   "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
+    "16": "icons/yulogo-16.png",
+    "48": "icons/yulogo-48.png",
+    "128": "icons/yulogo-128.png"
   },
   "permissions": [
     "storage",
-    "activeTab",
-    "cookies",
     "declarativeNetRequest",
     "alarms",
     "scripting",
-    "identity",
     "tabGroups"
   ],
   "host_permissions": [
@@ -39,21 +36,15 @@
     "https://mulebuy.com/*",
     "https://*.allchinabuy.com/*",
     "https://allchinabuy.com/*",
-    "https://www.googleapis.com/*",
-    "https://api.open-meteo.com/*"
+    "https://api.open-meteo.com/*",
+    "https://raw.githubusercontent.com/*"
   ],
-  "oauth2": {
-    "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
-    "scopes": [
-      "https://www.googleapis.com/auth/calendar.readonly"
-    ]
-  },
   "action": {
     "default_popup": "popup/popup.html",
     "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
+      "16": "icons/yulogo-16.png",
+      "48": "icons/yulogo-48.png",
+      "128": "icons/yulogo-128.png"
     },
     "default_title": "YuCart"
   },

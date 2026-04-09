@@ -16,6 +16,7 @@ const CART_KEY = 'yucart_cart';
 const WARDROBE_KEY = 'yucart_wardrobe';
 const OUTFITS_KEY = 'yucart_outfits';
 const SETTINGS_KEY = 'yucart_settings';
+const LOCAL_SETTINGS_KEY = 'yucart_local_settings';
 const DNR_RULE_ID = 1;
 const {
   AGENT_CHECKOUT_CONFIG = {},
@@ -75,7 +76,11 @@ async function checkForUpdates() {
       console.log('[YuCart] ✅ Already on latest version');
     }
   } catch (error) {
-    console.error('[YuCart] Failed to check for updates:', error);
+    if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+      console.log('[YuCart] Update check skipped (network error or blocked).');
+    } else {
+      console.log('[YuCart] Failed to check for updates:', error.message);
+    }
   }
 }
 
@@ -124,7 +129,7 @@ async function fetchExchangeRate(targetCurrency = 'USD') {
       return cache;
     }
   } catch (e) {
-    console.error('YuCart: Failed to fetch exchange rate', e);
+    console.log('YuCart: Failed to fetch exchange rate', e.message);
   }
   return null;
 }
@@ -370,41 +375,7 @@ async function clearCart() {
   return [];
 }
 
-// Remove.bg API Key
-const REMOVE_BG_API_KEY = 'DPTNpTyCv42yzSCResFgoirD';
 
-// ── Remove.bg API ───────────────────────────────────────────────
-async function removeBackground(imageUrl) {
-  try {
-    const formData = new FormData();
-    formData.append('image_url', imageUrl);
-    formData.append('size', 'auto');
-    formData.append('format', 'png');
-
-    const response = await fetch('https://api.remove.bg/v1.0/removebg', {
-      method: 'POST',
-      headers: {
-        'X-Api-Key': REMOVE_BG_API_KEY
-      },
-      body: formData
-    });
-
-    if (!response.ok) {
-      console.error('[YuCart] Remove.bg API error:', response.status);
-      return null;
-    }
-
-    const blob = await response.blob();
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result);
-      reader.readAsDataURL(blob);
-    });
-  } catch (err) {
-    console.error('[YuCart] Remove.bg failed:', err);
-    return null;
-  }
-}
 
 // ── Wardrobe operations ──────────────────────────────────────
 async function getWardrobe() {
@@ -472,8 +443,16 @@ async function deleteOutfit(outfitId) {
 
 // ── Settings ─────────────────────────────────────────────────
 async function getSettings() {
-  const result = await chrome.storage.sync.get(SETTINGS_KEY);
-  return { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}) };
+  const [syncResult, localResult] = await Promise.all([
+    chrome.storage.sync.get(SETTINGS_KEY),
+    chrome.storage.local.get(LOCAL_SETTINGS_KEY)
+  ]);
+
+  return {
+    ...DEFAULT_SETTINGS,
+    ...(syncResult[SETTINGS_KEY] || {}),
+    ...(localResult[LOCAL_SETTINGS_KEY] || {})
+  };
 }
 
 async function isWardrobeBetaEnabled() {
@@ -1100,16 +1079,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
               const PROJECT_ID = 'yucart-extension';
               const API_KEY = 'AIzaSyB99EE4fClAhFlqrZk3G7nlLizIH1vXojg';
               const COLLECTION = 'cleaned_names';
-              
+
               const url = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${COLLECTION}?key=${API_KEY}`;
-              
+
               const payload = {
                 fields: {
-                  originalName: { stringValue: msg.data.originalName || "Unknown" },
-                  cleanedName: { stringValue: msg.data.cleanedName || "Unknown" },
-                  storeLink: { stringValue: msg.data.storeLink || "" },
-                  productLink: { stringValue: msg.data.productLink || "" },
-                  vendor: { stringValue: msg.data.vendor || "Unknown" },
+                  originalName: { stringValue: msg.data.originalName || 'Unknown' },
+                  cleanedName: { stringValue: msg.data.cleanedName || 'Unknown' },
+                  storeLink: { stringValue: msg.data.storeLink || '' },
+                  productLink: { stringValue: msg.data.productLink || '' },
+                  vendor: { stringValue: msg.data.vendor || 'Unknown' },
                   color: msg.data.color ? { stringValue: msg.data.color } : { nullValue: null },
                   itemType: msg.data.itemType ? { stringValue: msg.data.itemType } : { nullValue: null },
                   timestamp: { timestampValue: new Date(msg.data.timestamp || Date.now()).toISOString() }
@@ -1121,7 +1100,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
               });
-              
+
               if (!resp.ok) {
                 const errorData = await resp.json().catch(() => ({}));
                 console.error('[YuCart BG] Firestore upload failed:', errorData);

@@ -1,6 +1,6 @@
 /* ============================================================
    YuCart — Wardrobe Page Logic
-   Calendar, geolocation, weather, Google Calendar, AI outfits, wardrobe grid
+   Calendar, geolocation, weather, AI outfits, wardrobe grid
    ============================================================ */
 
 // ── State ──────────────────────────────────────────────────────
@@ -10,8 +10,6 @@ let selectedDate = new Date();
 let calendarOffset = 0; // weeks offset from current week
 let userLocation = null; // { lat, lng }
 let weatherData = null; // { temp, condition, icon }
-let calendarEvents = [];
-let gcalConnected = false;
 let settings = {};
 let activeView = 'wardrobe'; // 'wardrobe' | 'outfits'
 
@@ -32,8 +30,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateGenerateBtn();
     // Try to load cached location
     tryLoadCachedLocation();
-    // Try to auto-load calendar events if previously connected
-    tryAutoLoadCalendarEvents();
 });
 
 function renderBetaDisabledState() {
@@ -170,7 +166,6 @@ function updateOutfitBadge() {
 
 function onDateChanged() {
     if (userLocation) fetchWeather(userLocation.lat, userLocation.lng, selectedDate);
-    if (gcalConnected) fetchEventsForDate(selectedDate);
     updateGenerateBtn();
 }
 
@@ -316,127 +311,13 @@ function weatherCodeToIcon(code) {
     return '⛈️';
 }
 
-// ── Google Calendar ────────────────────────────────────────────
-async function tryAutoLoadCalendarEvents() {
-    try {
-        const token = await new Promise((resolve, reject) => {
-            chrome.identity.getAuthToken({ interactive: false }, (t) => {
-                if (chrome.runtime.lastError || !t) reject();
-                else resolve(t);
-            });
-        });
-        gcalConnected = true;
-        const status = document.getElementById('gcalStatus');
-        status.textContent = 'Connected';
-        status.classList.add('gcal-status--connected');
-        await fetchEventsForDate(selectedDate, token);
-    } catch {
-        document.getElementById('gcalStatus').textContent = 'Not connected';
-    }
-}
-
-async function fetchEventsForDate(date, token) {
-    if (!token) {
-        try {
-            token = await new Promise((resolve, reject) => {
-                chrome.identity.getAuthToken({ interactive: false }, (t) => {
-                    if (chrome.runtime.lastError || !t) reject();
-                    else resolve(t);
-                });
-            });
-        } catch {
-            return;
-        }
-    }
-
-    const startOfDay = new Date(date);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(date);
-    endOfDay.setHours(23, 59, 59, 999);
-
-    try {
-        const res = await fetch(
-            `https://www.googleapis.com/calendar/v3/calendars/primary/events?` +
-            `timeMin=${startOfDay.toISOString()}&timeMax=${endOfDay.toISOString()}&singleEvents=true&orderBy=startTime`,
-            { headers: { Authorization: `Bearer ${token}` } }
-        );
-
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-
-        calendarEvents = (data.items || []).map(event => ({
-            name: event.summary || 'Untitled Event',
-            time: event.start?.dateTime
-                ? new Date(event.start.dateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                : 'All day',
-            description: event.description || ''
-        }));
-
-        renderCalendarEvents();
-    } catch (err) {
-        console.error('[YuCart Wardrobe] Failed to fetch events:', err);
-    }
-}
-
-function renderCalendarEvents() {
-    const container = document.getElementById('gcalEvents');
-    if (calendarEvents.length === 0) {
-        container.style.display = 'none';
-        return;
-    }
-
-    container.style.display = 'flex';
-    container.innerHTML = calendarEvents.map(event => `
-        <div class="gcal-event">
-            <span class="gcal-event__time">${event.time}</span>
-            <span class="gcal-event__name">${event.name}</span>
-        </div>
-    `).join('');
-}
-
 // ── Generate Outfit ────────────────────────────────────────────
 function updateGenerateBtn() {
     const btn = document.getElementById('generateBtn');
     btn.disabled = wardrobe.length < 2;
 }
 
-// Remove.bg API Key
-const REMOVE_BG_API_KEY = 'DPTNpTyCv42yzSCResFgoirD';
 
-async function removeBackground(imageUrl) {
-    if (!imageUrl || !imageUrl.startsWith('http')) {
-        return imageUrl;
-    }
-    try {
-        const formData = new FormData();
-        formData.append('image_url', imageUrl);
-        formData.append('size', 'auto');
-        formData.append('format', 'png');
-
-        const response = await fetch('https://api.remove.bg/v1.0/removebg', {
-            method: 'POST',
-            headers: {
-                'X-Api-Key': REMOVE_BG_API_KEY
-            },
-            body: formData
-        });
-
-        if (!response.ok) {
-            console.error('[YuCart] Remove.bg API error:', response.status);
-            return imageUrl;
-        }
-
-        const blob = await response.blob();
-        return new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result);
-            reader.readAsDataURL(blob);
-        });
-    } catch (err) {
-        console.error('[YuCart] Remove.bg failed:', err);
-        return imageUrl;
-    }
-}
 
 async function generateOutfit() {
     const btn = document.getElementById('generateBtn');
@@ -465,11 +346,6 @@ async function generateOutfit() {
             contextParts.push(`Location coordinates: ${userLocation.lat.toFixed(4)}, ${userLocation.lng.toFixed(4)} (infer the weather, climate, and temperature for this location and date)`);
         }
 
-        if (calendarEvents.length > 0) {
-            const eventList = calendarEvents.map(e => `${e.time}: ${e.name}`).join(', ');
-            contextParts.push(`Calendar events: ${eventList}`);
-        }
-
         const context = contextParts.join('\n');
 
         let outfitData;
@@ -481,16 +357,6 @@ async function generateOutfit() {
 
         if (outfitData && outfitData.length > 0) {
             for (const outfit of outfitData) {
-                // Process images with remove.bg for each item in the outfit
-                for (const item of outfit.items) {
-                    const wardrobeItem = wardrobe.find(w => w.id === item.id);
-                    if (wardrobeItem && wardrobeItem.thumbnail) {
-                        const processedThumbnail = await removeBackground(wardrobeItem.thumbnail);
-                        if (processedThumbnail) {
-                            item.thumbnail = processedThumbnail;
-                        }
-                    }
-                }
                 await chrome.runtime.sendMessage({ action: 'saveOutfit', outfit });
             }
             await loadOutfits();
@@ -521,7 +387,6 @@ Rules:
 - Create exactly 1 outfit using ONLY items from the wardrobe below
 - The outfit should have 2-5 items that work well together
 - Consider weather/climate based on the location and date
-- Consider calendar events for occasion-appropriate styling
 - Provide: a creative name, occasion tag, the item IDs used, and brief styling notes
 - Think about color coordination, layering for weather, and occasion appropriateness
 
@@ -593,7 +458,6 @@ Rules:
 - Create exactly 1 outfit using ONLY items from the wardrobe
 - The outfit should have 2-5 items that work well together
 - Consider weather/climate based on location and date
-- Consider calendar events for occasion-appropriate styling
 - Think about color coordination, layering for weather, and occasion
 
 Respond with ONLY a JSON array containing one object, no markdown:

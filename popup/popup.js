@@ -450,6 +450,7 @@ async function handleCleanAll() {
                     }).catch(err => console.error('[YuCart] Failed to trigger webhook upload:', err));
                 }
             }
+
         } else {
             const cartResp = await chrome.runtime.sendMessage({ action: 'getCart' });
             cart = cartResp?.cart || [];
