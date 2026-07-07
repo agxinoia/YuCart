@@ -1075,12 +1075,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case 'uploadCleanedNames': {
           if (msg.data) {
             try {
-              // Hardcoded Firebase Firestore REST API configuration
               const PROJECT_ID = 'yucart-extension';
-              const API_KEY = 'AIzaSyB99EE4fClAhFlqrZk3G7nlLizIH1vXojg';
               const COLLECTION = 'cleaned_names';
+              const settings = await getSettings();
+              const firebaseApiKey = String(settings.firebaseApiKey || '').trim();
 
-              const url = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${COLLECTION}?key=${API_KEY}`;
+              if (!firebaseApiKey) {
+                console.warn('[YuCart BG] uploadCleanedNames skipped: firebaseApiKey is not configured');
+                sendResponse({ success: false, error: 'Upload disabled: firebaseApiKey is not configured' });
+                break;
+              }
+
+              const url = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${COLLECTION}?key=${encodeURIComponent(firebaseApiKey)}`;
 
               const payload = {
                 fields: {
