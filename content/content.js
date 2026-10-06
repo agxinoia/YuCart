@@ -26,6 +26,7 @@
     const AuFreeShip = globalThis.YuCartAuFreeShip || null;
     let auFreeShipEnabled = false;
     let auResults = null;
+    let auWaiting = null;
 
     // ── Cleanup when extension is reloaded ─────────────────────
     let observer = null;
@@ -181,8 +182,13 @@
     // ── Listen for settings changes ────────────────────────────
     function handleSettingsChange(changes, area) {
         try {
-            if (area === 'local' && AuFreeShip && changes[AuFreeShip.STORAGE_KEY]) {
-                auResults = AuFreeShip.normalizeResults(changes[AuFreeShip.STORAGE_KEY].newValue);
+            if (area === 'local' && AuFreeShip && (changes[AuFreeShip.STORAGE_KEY] || changes[AuFreeShip.WAITING_KEY])) {
+                if (changes[AuFreeShip.STORAGE_KEY]) {
+                    auResults = AuFreeShip.normalizeResults(changes[AuFreeShip.STORAGE_KEY].newValue);
+                }
+                if (changes[AuFreeShip.WAITING_KEY]) {
+                    auWaiting = changes[AuFreeShip.WAITING_KEY].newValue?.status || null;
+                }
                 renderAuFreeShip();
             }
             if (area === 'sync' && changes.yucart_settings) {
@@ -697,12 +703,18 @@
             return;
         }
         try {
-            const stored = await chrome.storage.local.get(AuFreeShip.STORAGE_KEY);
+            const stored = await chrome.storage.local.get([AuFreeShip.STORAGE_KEY, AuFreeShip.WAITING_KEY]);
             auResults = AuFreeShip.normalizeResults(stored[AuFreeShip.STORAGE_KEY]);
+            auWaiting = stored[AuFreeShip.WAITING_KEY]?.status || null;
         } catch {
             auResults = AuFreeShip.emptyResults();
         }
         renderAuFreeShip();
+    }
+
+    // A running check that is waiting for the user on the Taobao tab.
+    function auPendingStatus(slot) {
+        return auPending[slot] === 'checking' && auWaiting ? auWaiting : auPending[slot];
     }
 
     function getVendorSlug() {
@@ -756,7 +768,7 @@
             bar.insertBefore(pill, bar.querySelector('.yucart-add-btn'));
         }
         const record = AuFreeShip.lookupTaobaoLink(auResults, AuFreeShip.parseTaobaoLink(link));
-        const status = auPending.item || record?.status || 'unchecked';
+        const status = auPendingStatus('item') || record?.status || 'unchecked';
         pill.dataset.tone = AuFreeShip.describeStatus(status).tone;
         pill.textContent = AuFreeShip.describeStatus(status).label;
         pill.title = auTooltip(status, record);
@@ -787,7 +799,7 @@
             document.body.appendChild(chip);
         }
         const record = auResults.vendors[vendor];
-        const status = auPending.vendor || record?.status || 'unchecked';
+        const status = auPendingStatus('vendor') || record?.status || 'unchecked';
         chip.dataset.tone = AuFreeShip.describeStatus(status).tone;
         chip.querySelector('.yucart-au-chip__label').textContent = AuFreeShip.describeStatus(status).label;
         chip.querySelector('.yucart-au-chip__main').title = auTooltip(status, record);
