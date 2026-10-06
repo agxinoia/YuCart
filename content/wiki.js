@@ -129,7 +129,7 @@
         const checked = all.filter((target) => recordFor(target)).length;
         const eligible = all.filter((target) => recordFor(target)?.status === 'eligible').length;
         const stats = `${eligible} eligible · ${checked}/${all.length} sellers & listings checked`;
-        const note = batch ? `Checking ${batch.done + 1} of ${batch.total}… (Taobao opens in a background tab)` : panelNote;
+        const note = batch ? `${batch.done} of ${batch.total} checked… (Taobao opens in a background tab)` : panelNote;
         const batchLabel = batch ? 'Stop' : 'Check unchecked';
 
         setText(panel.querySelector('.yucart-wiki-panel__stats'), stats);
@@ -190,15 +190,17 @@
         for (const target of queue) {
             if (batch.stopped) break;
             // An earlier check may already have covered this seller's shop.
-            if (!recordFor(target)) {
+            const needsCheck = !recordFor(target);
+            if (needsCheck) {
                 const status = await checkOne(target);
                 if (AuFreeShip.BLOCKING_STATUSES.includes(status)) {
                     panelNote = `Paused: ${AuFreeShip.describeStatus(status).detail}.`;
                     break;
                 }
-                if (!batch.stopped) await sleep(CHECK_DELAY_MS);
             }
             batch.done++;
+            renderPanel();
+            if (needsCheck && !batch.stopped) await sleep(CHECK_DELAY_MS);
         }
         if (!panelNote) panelNote = batch.stopped ? 'Stopped.' : 'Done.';
         batch = null;
