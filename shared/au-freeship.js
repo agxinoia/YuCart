@@ -13,6 +13,8 @@
     // What the running check is doing: { target, step, waiting }, where
     // waiting is set while it needs the user on the Taobao tab.
     const ACTIVITY_KEY = 'yucart_au_activity';
+    // Recent debug lines from checks, shown (and copyable) in settings.
+    const LOG_KEY = 'yucart_au_log';
     const SETTING_KEY = 'betaAuFreeShipEnabled';
 
     // Requested at runtime when the feature is switched on in settings.
@@ -196,6 +198,49 @@
         return { type: 'shop', shopId, sellerId, storeHost, url: url.href };
     }
 
+    function safeDecode(value) {
+        try {
+            return decodeURIComponent(value);
+        } catch {
+            return value;
+        }
+    }
+
+    // One key per listing or shop, so the same link in different forms counts once.
+    function linkKey(link) {
+        if (link.type === 'item') return `item:${link.itemId}`;
+        if (link.type === 'shop') return shopKeys(link)[0];
+        return `short:${link.url}`;
+    }
+
+    const PRODUCT_LINK_RE = /(?:https?:\/\/)?(?:[a-z0-9-]+\.)*(?:taobao\.com|tmall\.com|tb\.cn|weidian\.com|1688\.com)(?:[/?#][^\s<>"'`，。、；）)\]】]*)?/gi;
+
+    // Product links anywhere in a Yupoo page's HTML: in anchors (including
+    // Yupoo's external?url= redirect, percent-encoded once or twice), pasted
+    // as plain text, or in the page's embedded JSON. Returns the Taobao
+    // links (one per listing or shop) and how many Weidian/1688 links there are.
+    function findProductLinks(html) {
+        const source = String(html || '')
+            .replace(/\\u002[fF]/g, '/')
+            .replace(/\\\//g, '/')
+            .replace(/&amp;/gi, '&')
+            .replace(/%25([0-9a-f]{2})/gi, '%$1')
+            .replace(/%(?:3A|2F|3F|3D|26|23)/gi, (code) => safeDecode(code));
+        const taobao = new Map();
+        const others = new Set();
+        for (const [raw] of source.matchAll(PRODUCT_LINK_RE)) {
+            if (/weidian\.com|1688\.com/i.test(raw)) {
+                others.add(raw.toLowerCase());
+                continue;
+            }
+            const link = parseTaobaoLink(raw);
+            if (link && !taobao.has(linkKey(link))) {
+                taobao.set(linkKey(link), { key: linkKey(link), url: /^https?:/i.test(raw) ? raw : `https://${raw}` });
+            }
+        }
+        return { taobao: [...taobao.values()], otherCount: others.size };
+    }
+
     // Every key a shop can be looked up by, most specific first.
     function shopKeys(identity) {
         if (!identity) return [];
@@ -251,6 +296,7 @@
         THRESHOLD_CNY,
         STORAGE_KEY,
         ACTIVITY_KEY,
+        LOG_KEY,
         SETTING_KEY,
         OPTIONAL_ORIGINS,
         WIKI_SCRIPT,
@@ -258,6 +304,7 @@
         BLOCKING_STATUSES,
         describeStatus,
         extractTaobaoLink,
+        findProductLinks,
         parseTaobaoLink,
         parseYupooVendor,
         shopKeys,
