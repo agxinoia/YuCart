@@ -250,11 +250,23 @@ async function addToCart(item) {
   return cart;
 }
 
+// fetch() with a time limit on the whole response, body included. Chrome
+// also stops an extension service worker whose fetch takes over 30s.
+async function fetchTextWithTimeout(url, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(url, { credentials: 'omit', signal: controller.signal });
+    return resp.ok ? await resp.text() : '';
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Fetch a Yupoo album page and return the product source link from its subtitle
 async function fetchAlbumProductLink(albumUrl) {
-  const resp = await fetch(albumUrl, { credentials: 'omit' });
-  if (!resp.ok) return '';
-  const html = await resp.text();
+  const html = await fetchTextWithTimeout(albumUrl);
+  if (!html) return '';
 
   // Parse the gallerysubtitle anchor's href
   // Pattern: <a ... href="...external?url=ENCODED_URL..."...> inside gallerysubtitle
@@ -1022,11 +1034,17 @@ async function handleAgentCheckoutTab(agentId, tabUrl) {
 // caches the answer per item, per Taobao shop and per Yupoo vendor.
 const AU_MAX_ITEMS_PER_CHECK = 3;
 const AU_MAX_ALBUM_FETCHES = 12;
-const AU_PAGE_LOAD_MS = 15000;
+const AU_ALBUM_FETCH_CONCURRENCY = 4;
+const AU_PAGE_LOAD_MS = 20000;           // per Taobao page, unless waiting for the user
+const AU_SCRIPT_TIMEOUT_MS = 8000;       // per read of a Taobao page
 const AU_USER_WAIT_MS = 3 * 60 * 1000;   // time to log in or pass the slider
 const AU_BLOCK_CONFIRM_POLLS = 3;        // ~3s before a login page counts
 let auCheckChain = Promise.resolve();
-let auActiveRun = null;                  // { waiting, handedToUser } for the running check
+let auActiveRun = null;                  // { activity, handedToUser, startedAt } for the running check
+
+// A check can't survive a service worker restart, so drop any progress
+// line one left behind.
+if (AuFreeShip) chrome.storage.local.remove(AuFreeShip.ACTIVITY_KEY).catch(() => {});
 
 // One check at a time: each one drives a Taobao tab, and opening several
 // Taobao pages at once makes its verification slider more likely.
@@ -1237,14 +1255,31 @@ async function handAuTabToUser(tabId) {
   if (tab) chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
 }
 
-async function setAuWaiting(status) {
-  if (!auActiveRun || auActiveRun.waiting === status) return;
-  auActiveRun.waiting = status;
-  if (status) {
-    await chrome.storage.local.set({ [AuFreeShip.WAITING_KEY]: { status, since: Date.now() } });
-  } else {
-    await chrome.storage.local.remove(AuFreeShip.WAITING_KEY);
-  }
+// Share what the running check is doing with Yupoo and wiki pages, and log
+// it so a slow check can be traced in the service worker console.
+async function reportAu(update) {
+  if (!auActiveRun) return;
+  const previous = auActiveRun.activity;
+  const next = { ...previous, ...update };
+  if (next.step === previous.step && next.waiting === previous.waiting) return;
+  auActiveRun.activity = next;
+  const seconds = ((Date.now() - auActiveRun.startedAt) / 1000).toFixed(1);
+  console.info(`[YuCart AU] ${next.target}: ${next.waiting || next.step} (${seconds}s)`);
+  await chrome.storage.local.set({ [AuFreeShip.ACTIVITY_KEY]: next });
+}
+
+// Read the Taobao tab as it is, without waiting for it to finish loading:
+// heavy pages in a background tab can take a long time to reach "complete",
+// and Chrome can freeze a hidden tab, so each read has a time limit.
+function readTaobaoTab(tabId) {
+  const injection = chrome.scripting.executeScript({
+    target: { tabId },
+    func: inspectTaobaoPage,
+    args: [AuFreeShip.inspectConfig()],
+    world: 'MAIN',
+    injectImmediately: true
+  }).then((results) => results?.[0]?.result ?? null, () => null);
+  return Promise.race([injection, sleep(AU_SCRIPT_TIMEOUT_MS).then(() => null)]);
 }
 
 // Load a URL in the check tab and poll until the tag shows up, the page is
@@ -1252,9 +1287,8 @@ async function setAuWaiting(status) {
 // Taobao asks for a login or its slider, the tab is brought to the front and
 // the check waits for the user, then carries on.
 async function loadAndInspectTaobao(tabId, url, { itemId = '', wantItems = false } = {}) {
+  const previousUrl = (await chrome.tabs.get(tabId).catch(() => null))?.url || '';
   await chrome.tabs.update(tabId, { url });
-  await sleep(300);
-  await waitForTabComplete(tabId);
 
   let page = null;
   let deadline = Date.now() + AU_PAGE_LOAD_MS;
@@ -1262,12 +1296,13 @@ async function loadAndInspectTaobao(tabId, url, { itemId = '', wantItems = false
   let blockedPolls = 0;
   let waitedForUser = false;
   let reopenedListing = false;
-  for (let attempt = 0; Date.now() < deadline; attempt++) {
-    await sleep(attempt === 0 ? 1500 : 1000);
+  while (Date.now() < deadline) {
+    await sleep(1000);
     // The user closed the tab instead of logging in.
     if (!(await chrome.tabs.get(tabId).catch(() => null))) break;
-    const result = await runScriptInTab(tabId, inspectTaobaoPage, [AuFreeShip.inspectConfig()], 'MAIN');
-    if (!result) continue;
+    const result = await readTaobaoTab(tabId);
+    // Still the page from before the navigation.
+    if (!result || (result.url === previousUrl && previousUrl !== url)) continue;
     page = result;
 
     // Taobao passes through login.taobao.com for a moment when it refreshes
@@ -1280,12 +1315,12 @@ async function loadAndInspectTaobao(tabId, url, { itemId = '', wantItems = false
           deadline = Date.now() + AU_USER_WAIT_MS;
           await handAuTabToUser(tabId);
         }
-        await setAuWaiting(page.security ? 'waiting_security' : 'waiting_login');
+        await reportAu({ waiting: page.security ? 'waiting_security' : 'waiting_login' });
       }
       continue;
     }
     blockedPolls = 0;
-    await setAuWaiting(null);
+    await reportAu({ waiting: null });
 
     if (itemId && page.itemId !== itemId) {
       // After logging in Taobao can land on its home page; go back once.
@@ -1300,6 +1335,7 @@ async function loadAndInspectTaobao(tabId, url, { itemId = '', wantItems = false
     const settled = wantItems ? page.itemIds.length > 0 : page.ready;
     if (settled && ++settledPolls >= 3) return page;
   }
+  console.info(`[YuCart AU] ${url} did not settle in time; last seen ${page ? `${page.url} (ready: ${page.ready})` : 'nothing readable'}`);
   return page;
 }
 
@@ -1309,6 +1345,7 @@ async function checkTaobaoItemInTab(tabId, itemId) {
   if (page && page.itemId !== itemId && !['security_check', 'login_required'].includes(status)) {
     status = 'error';
   }
+  console.info(`[YuCart AU] listing ${itemId}: ${status}${page?.label ? ` ("${page.label.matched}")` : ''}`);
   return {
     status,
     itemId,
@@ -1336,6 +1373,7 @@ function loginRedirectTarget(rawUrl) {
 
 // Short links (m.tb.cn) only reveal the item or shop once they redirect.
 async function resolveTaobaoShortLink(tabId, shortUrl) {
+  await reportAu({ step: 'following the share link' });
   await chrome.tabs.update(tabId, { url: shortUrl });
   let lastUrl = '';
   for (let attempt = 0; attempt < 15; attempt++) {
@@ -1402,7 +1440,8 @@ async function checkTaobaoShopInTab(tabId, link) {
 
   // Shop home pages sometimes lazy-load their items; the search page lists them.
   let page = null;
-  for (const pageUrl of pageUrls) {
+  for (const [index, pageUrl] of pageUrls.entries()) {
+    await reportAu({ step: index === 0 ? 'opening the Taobao shop' : 'opening the shop\'s item list' });
     page = await loadAndInspectTaobao(tabId, pageUrl, { wantItems: true });
     if (!page || page.label || page.security || page.login || page.itemIds.length) break;
   }
@@ -1421,7 +1460,9 @@ async function checkTaobaoShopInTab(tabId, link) {
   if (page?.label) {
     outcome = { status: 'eligible', matched: page.label.matched };
   } else {
-    for (const itemId of (page?.itemIds || []).slice(0, AU_MAX_ITEMS_PER_CHECK)) {
+    const itemIds = (page?.itemIds || []).slice(0, AU_MAX_ITEMS_PER_CHECK);
+    for (const [index, itemId] of itemIds.entries()) {
+      await reportAu({ step: `checking shop listing ${index + 1} of ${itemIds.length}` });
       const check = await checkTaobaoItemInTab(tabId, itemId);
       itemChecks.push(check);
       if (check.status === 'eligible' || AuFreeShip.BLOCKING_STATUSES.includes(check.status)) break;
@@ -1493,9 +1534,7 @@ function sanitizeVendorAlbumUrls(vendor, albumUrls) {
 async function fetchYupooAlbumUrls(vendor) {
   const origin = `https://${vendor}.x.yupoo.com`;
   try {
-    const resp = await fetch(`${origin}/albums`, { credentials: 'omit' });
-    if (!resp.ok) return [];
-    const html = await resp.text();
+    const html = await fetchTextWithTimeout(`${origin}/albums`);
     const urls = new Map();
     for (const match of html.matchAll(/href=["'](\/albums\/(\d+)[^"']*)["']/g)) {
       if (!urls.has(match[2])) urls.set(match[2], origin + match[1].replace(/&amp;/g, '&'));
@@ -1522,14 +1561,18 @@ async function collectVendorTaobaoLinks(vendor, productUrls, albumUrls) {
 
   (Array.isArray(productUrls) ? productUrls : []).forEach(add);
   let albums = sanitizeVendorAlbumUrls(vendor, albumUrls);
-  if (!albums.length) albums = await fetchYupooAlbumUrls(vendor);
-  for (const albumUrl of albums.slice(0, AU_MAX_ALBUM_FETCHES)) {
-    if (taobaoLinks.length >= AU_MAX_ITEMS_PER_CHECK) break;
-    try {
-      add(await fetchAlbumProductLink(albumUrl));
-    } catch {
-      // Skip albums that fail to load.
-    }
+  if (!albums.length) {
+    await reportAu({ step: 'reading the Yupoo album list' });
+    albums = await fetchYupooAlbumUrls(vendor);
+  }
+  albums = albums.slice(0, AU_MAX_ALBUM_FETCHES);
+  // A few albums at a time, in order, until enough Taobao links turn up.
+  for (let start = 0; start < albums.length && taobaoLinks.length < AU_MAX_ITEMS_PER_CHECK; start += AU_ALBUM_FETCH_CONCURRENCY) {
+    const group = albums.slice(start, start + AU_ALBUM_FETCH_CONCURRENCY);
+    await reportAu({ step: `reading Yupoo albums (${start + group.length} of ${albums.length})` });
+    // Albums that fail to load are skipped.
+    const links = await Promise.all(group.map((albumUrl) => fetchAlbumProductLink(albumUrl).catch(() => '')));
+    links.forEach(add);
   }
   return { taobaoLinks, otherLinks };
 }
@@ -1541,7 +1584,9 @@ async function checkYupooVendorInTab(tabId, vendor, productUrls, albumUrls) {
     outcome = { status: otherLinks ? 'not_taobao' : 'no_links' };
   } else {
     const checks = [];
-    for (const link of taobaoLinks.slice(0, AU_MAX_ITEMS_PER_CHECK)) {
+    const links = taobaoLinks.slice(0, AU_MAX_ITEMS_PER_CHECK);
+    for (const [index, link] of links.entries()) {
+      await reportAu({ step: `checking Taobao listing ${index + 1} of ${links.length}` });
       const check = await checkTaobaoTargetInTab(tabId, link);
       checks.push(check);
       if (check.status === 'eligible' || AuFreeShip.BLOCKING_STATUSES.includes(check.status)) break;
@@ -1550,6 +1595,15 @@ async function checkYupooVendorInTab(tabId, vendor, productUrls, albumUrls) {
   }
   await updateAuResults((results) => recordAuVendor(results, vendor, outcome, Date.now()));
   return outcome;
+}
+
+// A short name for what's being checked, for the progress line and logs.
+function auTargetLabel(target, vendor) {
+  if (target.kind === 'yupoo') return `${vendor} (Yupoo)`;
+  const link = AuFreeShip.parseTaobaoLink(target.url);
+  if (link.type === 'item') return `Taobao listing ${link.itemId}`;
+  if (link.type === 'shop') return link.shopId ? `shop${link.shopId}.taobao.com` : link.storeHost || `Taobao seller ${link.sellerId}`;
+  return 'Taobao share link';
 }
 
 // target: { kind: 'taobao', url, vendor? } or { kind: 'yupoo', vendor, productUrls?, albumUrls? }
@@ -1561,9 +1615,13 @@ async function runAuFreeShipCheck(target, openerTabId = null) {
   if (target?.kind === 'yupoo' && !vendor) return { status: 'no_links' };
   if (target?.kind !== 'yupoo' && !AuFreeShip.parseTaobaoLink(target?.url)) return { status: 'no_links' };
 
-  await chrome.storage.local.remove(AuFreeShip.WAITING_KEY);
   const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
-  auActiveRun = { waiting: null, handedToUser: false };
+  auActiveRun = {
+    activity: { target: auTargetLabel(target, vendor), step: '', waiting: null },
+    handedToUser: false,
+    startedAt: Date.now()
+  };
+  await reportAu({ step: target.kind === 'yupoo' ? 'starting' : 'opening the Taobao page' });
   let outcome = { status: 'error' };
   try {
     outcome = target.kind === 'yupoo'
@@ -1571,9 +1629,10 @@ async function runAuFreeShipCheck(target, openerTabId = null) {
       : await checkTaobaoTargetInTab(tab.id, target.url, vendor);
     return outcome;
   } finally {
-    await setAuWaiting(null);
-    const handedToUser = auActiveRun.handedToUser;
+    const { activity, handedToUser, startedAt } = auActiveRun;
     auActiveRun = null;
+    await chrome.storage.local.remove(AuFreeShip.ACTIVITY_KEY);
+    console.info(`[YuCart AU] ${activity.target}: ${outcome.status} in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
     if (outcome.status === 'login_required' || outcome.status === 'security_check') {
       // Leave Taobao in front when the user still has to log in or pass the slider.
       chrome.tabs.update(tab.id, { active: true }).catch(() => {});

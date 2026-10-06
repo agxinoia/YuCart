@@ -10,8 +10,9 @@
 (function initAuFreeShip(global) {
     const THRESHOLD_CNY = 249;
     const STORAGE_KEY = 'yucart_au_freeship';
-    // Set while a check is waiting for the user on the Taobao tab.
-    const WAITING_KEY = 'yucart_au_waiting';
+    // What the running check is doing: { target, step, waiting }, where
+    // waiting is set while it needs the user on the Taobao tab.
+    const ACTIVITY_KEY = 'yucart_au_activity';
     const SETTING_KEY = 'betaAuFreeShipEnabled';
 
     // Requested at runtime when the feature is switched on in settings.
@@ -249,7 +250,7 @@
     global.YuCartAuFreeShip = Object.freeze({
         THRESHOLD_CNY,
         STORAGE_KEY,
-        WAITING_KEY,
+        ACTIVITY_KEY,
         SETTING_KEY,
         OPTIONAL_ORIGINS,
         WIKI_SCRIPT,

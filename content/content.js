@@ -182,12 +182,12 @@
     // ── Listen for settings changes ────────────────────────────
     function handleSettingsChange(changes, area) {
         try {
-            if (area === 'local' && AuFreeShip && (changes[AuFreeShip.STORAGE_KEY] || changes[AuFreeShip.WAITING_KEY])) {
+            if (area === 'local' && AuFreeShip && (changes[AuFreeShip.STORAGE_KEY] || changes[AuFreeShip.ACTIVITY_KEY])) {
                 if (changes[AuFreeShip.STORAGE_KEY]) {
                     auResults = AuFreeShip.normalizeResults(changes[AuFreeShip.STORAGE_KEY].newValue);
                 }
-                if (changes[AuFreeShip.WAITING_KEY]) {
-                    auWaiting = changes[AuFreeShip.WAITING_KEY].newValue?.status || null;
+                if (changes[AuFreeShip.ACTIVITY_KEY]) {
+                    auWaiting = changes[AuFreeShip.ACTIVITY_KEY].newValue?.waiting || null;
                 }
                 renderAuFreeShip();
             }
@@ -703,9 +703,9 @@
             return;
         }
         try {
-            const stored = await chrome.storage.local.get([AuFreeShip.STORAGE_KEY, AuFreeShip.WAITING_KEY]);
+            const stored = await chrome.storage.local.get([AuFreeShip.STORAGE_KEY, AuFreeShip.ACTIVITY_KEY]);
             auResults = AuFreeShip.normalizeResults(stored[AuFreeShip.STORAGE_KEY]);
-            auWaiting = stored[AuFreeShip.WAITING_KEY]?.status || null;
+            auWaiting = stored[AuFreeShip.ACTIVITY_KEY]?.waiting || null;
         } catch {
             auResults = AuFreeShip.emptyResults();
         }
