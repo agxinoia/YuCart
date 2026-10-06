@@ -37,7 +37,7 @@ YuCart uses data to:
 
 YuCart primarily stores user data in Chrome extension storage on the user's device.
 
-- `chrome.storage.local` is used for cart contents, wardrobe items, saved outfits, cached location, exchange-rate cache, update-check cache, Taobao free-shipping check results, and local-only settings such as AI API keys.
+- `chrome.storage.local` is used for cart contents, wardrobe items, saved outfits, cached location, exchange-rate cache, update-check cache, Taobao free-shipping check results and a debug log of recent checks (page addresses, titles and shipping text), and local-only settings such as AI API keys.
 - `chrome.storage.sync` may be used for non-sensitive settings and preferences that Chrome can sync across the user's signed-in browser profile.
 
 Users can remove locally stored data by clearing the cart and wardrobe inside the extension, changing settings, or removing the extension.

@@ -695,6 +695,7 @@
     // showing whether this seller's Taobao shop ships free to Australia.
     const AU_CHIP_HIDDEN_KEY = 'yucart_au_chip_hidden';
     const auPending = { item: '', vendor: '' };
+    const auNotes = { item: '', vendor: '' };   // why an uncached check ended the way it did
 
     async function applyAuFreeShipFeature(enabled) {
         auFreeShipEnabled = enabled === true && !!AuFreeShip;
@@ -733,8 +734,10 @@
         }
     }
 
-    function auTooltip(status, record) {
+    function auTooltip(status, record, note) {
         const lines = [AuFreeShip.describeStatus(status).detail];
+        const reason = record?.note || note;
+        if (reason) lines.push(reason);
         if (record?.matched) lines.push(`Matched: ${record.matched}`);
         if (record?.shopName) lines.push(`Shop: ${record.shopName}`);
         if (record?.checkedAt) lines.push(`Checked ${new Date(record.checkedAt).toLocaleDateString()}`);
@@ -771,7 +774,7 @@
         const status = auPendingStatus('item') || record?.status || 'unchecked';
         pill.dataset.tone = AuFreeShip.describeStatus(status).tone;
         pill.textContent = AuFreeShip.describeStatus(status).label;
-        pill.title = auTooltip(status, record);
+        pill.title = auTooltip(status, record, auNotes.item);
     }
 
     function renderAuVendorChip() {
@@ -802,7 +805,7 @@
         const status = auPendingStatus('vendor') || record?.status || 'unchecked';
         chip.dataset.tone = AuFreeShip.describeStatus(status).tone;
         chip.querySelector('.yucart-au-chip__label').textContent = AuFreeShip.describeStatus(status).label;
-        chip.querySelector('.yucart-au-chip__main').title = auTooltip(status, record);
+        chip.querySelector('.yucart-au-chip__main').title = auTooltip(status, record, auNotes.vendor);
     }
 
     // Album links on this page, so the background check can find the
@@ -825,7 +828,8 @@
             return outcome?.status ? outcome : { status: 'error' };
         } catch (e) {
             if (e.message?.includes('Extension context invalidated')) cleanup();
-            return { status: 'error' };
+            // Usually the extension was reloaded while this page stayed open.
+            return { status: 'error', note: `Couldn't reach YuCart (${e.message || e}). Refresh this page.` };
         }
     }
 
@@ -837,6 +841,7 @@
         renderAuFreeShip();
         const outcome = await sendAuCheck(target);
         auPending[slot] = AuFreeShip.STORED_STATUSES.includes(outcome.status) ? '' : outcome.status;
+        auNotes[slot] = outcome.note || '';
         renderAuFreeShip();
     }
 

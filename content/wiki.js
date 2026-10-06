@@ -20,6 +20,7 @@
     const CHECK_DELAY_MS = 3000;
     const targets = new Map();   // key -> link target, one per seller/listing
     const pending = new Map();   // key -> 'checking' or a status that isn't cached
+    const notes = new Map();     // key -> why an uncached check ended the way it did
     let results = AuFreeShip.emptyResults();
     let activity = null;         // what the running check is doing: { target, step, waiting }
     let waiting = null;          // set while that check needs the user on the Taobao tab
@@ -56,8 +57,10 @@
         return pendingStatus || recordFor(target)?.status || 'unchecked';
     }
 
-    function tooltip(status, record) {
+    function tooltip(status, record, note) {
         const lines = [AuFreeShip.describeStatus(status).detail];
+        const reason = record?.note || note;
+        if (reason) lines.push(reason);
         if (record?.matched) lines.push(`Matched: ${record.matched}`);
         if (record?.shopName) lines.push(`Shop: ${record.shopName}`);
         if (record?.checkedAt) lines.push(`Checked ${new Date(record.checkedAt).toLocaleDateString()}`);
@@ -98,7 +101,7 @@
             // Only touch the DOM on change so the observer doesn't loop.
             if (badge.textContent !== meta.label) badge.textContent = meta.label;
             if (badge.dataset.tone !== meta.tone) badge.dataset.tone = meta.tone;
-            badge.title = tooltip(status, recordFor(target));
+            badge.title = tooltip(status, recordFor(target), notes.get(target.key));
         }
         renderPanel();
     }
@@ -120,6 +123,7 @@
                 <div class="yucart-wiki-panel__actions">
                     <button type="button" class="yucart-wiki-panel__btn" data-action="batch"></button>
                     <button type="button" class="yucart-wiki-panel__btn yucart-wiki-panel__btn--ghost" data-action="next">Next eligible ↓</button>
+                    <button type="button" class="yucart-wiki-panel__btn yucart-wiki-panel__btn--ghost" data-action="log">Debug log</button>
                 </div>
             `;
             panel.querySelector('[data-action="batch"]').addEventListener('click', () => {
@@ -127,6 +131,12 @@
                 else runBatch();
             });
             panel.querySelector('[data-action="next"]').addEventListener('click', scrollToNextEligible);
+            panel.querySelector('[data-action="log"]').addEventListener('click', () => {
+                chrome.runtime.sendMessage({ action: 'auOpenLog' }).catch(() => {
+                    panelNote = 'YuCart was updated or reloaded. Refresh this page to use it again.';
+                    renderPanel();
+                });
+            });
             document.body.appendChild(panel);
         }
 
@@ -170,14 +180,18 @@
             ? { kind: 'yupoo', vendor: target.vendor }
             : { kind: 'taobao', url: target.url };
         let status = 'error';
+        let note = '';
         try {
             const outcome = await chrome.runtime.sendMessage({ action: 'auFreeShipCheck', target: messageTarget });
             status = outcome?.status || 'error';
-        } catch {
-            status = 'error';
+            note = outcome?.note || '';
+        } catch (error) {
+            // Usually the extension was reloaded while this page stayed open.
+            note = `Couldn't reach YuCart (${error?.message || error}). Refresh this page.`;
         }
 
         // Cached outcomes arrive through storage.onChanged.
+        notes.set(target.key, note);
         if (AuFreeShip.STORED_STATUSES.includes(status)) pending.delete(target.key);
         else pending.set(target.key, status);
         render();

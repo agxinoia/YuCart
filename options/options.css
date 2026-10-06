@@ -416,7 +416,32 @@ body {
 }
 
 .au-results__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
     margin-top: 12px;
+}
+
+.au-log {
+    width: 100%;
+    min-height: 220px;
+    padding: 10px 12px;
+    font-family: 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    resize: vertical;
+    white-space: pre;
+    overflow: auto;
+}
+
+.au-log:focus {
+    outline: none;
+    border-color: var(--teal);
 }
 
 /* ── Collapsible Card ────────────────────────────────────────── */

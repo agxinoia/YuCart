@@ -240,8 +240,56 @@ async function initAuFreeShip(enabled) {
         }
     });
 
-    const stored = await chrome.storage.local.get(AuFreeShip.STORAGE_KEY);
+    const stored = await chrome.storage.local.get([AuFreeShip.STORAGE_KEY, AuFreeShip.LOG_KEY]);
     renderAuResults(stored[AuFreeShip.STORAGE_KEY]);
+    initAuLog(enabled && granted, stored[AuFreeShip.LOG_KEY]);
+}
+
+// ── Free shipping finder debug log ───────────────────────────
+function initAuLog(enabled, lines) {
+    const card = document.getElementById('auLogCard');
+    const textarea = document.getElementById('auLog');
+    const render = (value) => {
+        const log = Array.isArray(value) ? value : [];
+        // Keep following new lines unless the user has scrolled up to read.
+        const atBottom = textarea.scrollTop + textarea.clientHeight >= textarea.scrollHeight - 20;
+        textarea.value = log.length ? log.join('\n') : 'No checks yet. Start one from a Yupoo page or the wiki.';
+        if (atBottom) textarea.scrollTop = textarea.scrollHeight;
+        card.hidden = !enabled && !log.length;
+    };
+    render(lines);
+    textarea.scrollTop = textarea.scrollHeight;
+
+    chrome.storage.onChanged.addListener((changes, area) => {
+        if (area === 'local' && changes[AuFreeShip.LOG_KEY]) render(changes[AuFreeShip.LOG_KEY].newValue);
+    });
+    document.getElementById('copyAuLog').addEventListener('click', async () => {
+        try {
+            await navigator.clipboard.writeText(textarea.value);
+            flashAuLogStatus('✓ Copied');
+        } catch {
+            textarea.focus();
+            textarea.select();
+            flashAuLogStatus('Press Ctrl+C (⌘C) to copy');
+        }
+    });
+    document.getElementById('clearAuLog').addEventListener('click', async () => {
+        await chrome.storage.local.remove(AuFreeShip.LOG_KEY);
+        flashAuLogStatus('✓ Cleared');
+    });
+
+    // The wiki panel's "Debug log" button opens settings at #au-log.
+    if (location.hash === '#au-log') {
+        card.hidden = false;
+        card.scrollIntoView({ block: 'start' });
+    }
+}
+
+function flashAuLogStatus(text) {
+    const status = document.getElementById('auLogStatus');
+    status.textContent = text;
+    status.classList.add('save-status--visible');
+    setTimeout(() => status.classList.remove('save-status--visible'), 2000);
 }
 
 async function handleAuToggle(event) {

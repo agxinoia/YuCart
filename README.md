@@ -58,7 +58,9 @@ Taobao's Global Free Shipping Plan (全球包邮计划) ships free to Australia 
    - **r/FashionReps wiki** (or any subreddit wiki): every Taobao shop/item and Yupoo store link gets a badge. Click one badge, or use **Check unchecked** to work through the page.
 4. Eligible sellers are listed in settings under **Free Shipping to Australia**.
 
-Each check opens the listing in a background tab, so it uses your own Taobao session. If Taobao asks you to log in or shows its verification slider, YuCart brings that tab to the front and waits up to 3 minutes. Once you're through, the check carries on by itself and you're taken back to the page you started from. Close the tab to cancel. You only need to log in once per Chrome profile; later checks reuse the session. Results are stored locally in `chrome.storage.local`. The tag text the checker looks for is in `shared/au-freeship.js` (`LABEL_PATTERNS`) if Taobao changes its wording.
+Each check opens the listing in a background tab, so it uses your own Taobao session. If Taobao asks you to log in or shows its verification slider, YuCart brings that tab to the front and waits up to 3 minutes. Once you're through, the check carries on by itself and you're taken back to the page you started from. Close the tab to cancel. You only need to log in once per Chrome profile; later checks reuse the session.
+
+If a result looks wrong, open settings → **Free Shipping Finder Log** (or **Debug log** on the wiki panel). It lists every Yupoo page read with the links found on it, and what each Taobao page showed, including the shipping text near the price. **Copy log** puts it on the clipboard for a bug report. Results are stored locally in `chrome.storage.local`. The tag text the checker looks for is in `shared/au-freeship.js` (`LABEL_PATTERNS`) if Taobao changes its wording.
 
 ## Contributing
 
