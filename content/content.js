@@ -808,18 +808,20 @@
         chip.querySelector('.yucart-au-chip__main').title = auTooltip(status, record, auNotes.vendor);
     }
 
-    // Album links on this page, so the background check can find the
-    // seller's Taobao listings without loading their whole store.
-    function collectAlbumUrls() {
-        const urls = new Map();
+    // Albums on this page with their titles, so the background check can
+    // read product albums (not pinned contact albums) without loading the
+    // whole store.
+    function collectAlbums() {
+        const albums = new Map();
         for (const anchor of document.querySelectorAll('a[href*="/albums/"]')) {
             const albumId = anchor.href.match(/^https:\/\/[^/]+\/albums\/(\d+)/)?.[1];
-            if (albumId && !urls.has(albumId) && anchor.hostname === window.location.hostname) {
-                urls.set(albumId, anchor.href.split('#')[0]);
+            if (albumId && !albums.has(albumId) && anchor.hostname === window.location.hostname) {
+                const title = anchor.getAttribute('title') || anchor.querySelector('.album__title')?.textContent || anchor.textContent;
+                albums.set(albumId, { url: anchor.href.split('#')[0], title: String(title || '').replace(/\s+/g, ' ').trim().slice(0, 120) });
             }
-            if (urls.size >= 20) break;
+            if (albums.size >= 60) break;
         }
-        return [...urls.values()];
+        return [...albums.values()];
     }
 
     async function sendAuCheck(target) {
@@ -859,7 +861,7 @@
             kind: 'yupoo',
             vendor,
             productUrls: subtitle ? [subtitle] : [],
-            albumUrls: collectAlbumUrls()
+            albums: collectAlbums()
         });
     }
 

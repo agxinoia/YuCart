@@ -1038,8 +1038,9 @@ async function handleAgentCheckoutTab(agentId, tabUrl) {
 // delivery address apply), looks for the "境外满包邮" tag and caches the
 // answer per item, per Taobao shop and per Yupoo vendor.
 const AU_MAX_ITEMS_PER_CHECK = 3;
-const AU_MAX_ALBUM_FETCHES = 12;
-const AU_ALBUMS_BEFORE_GIVING_UP = 8;    // stop early if this many albums have no product links
+const AU_MAX_ALBUM_FETCHES = 16;
+const AU_ALBUMS_BEFORE_GIVING_UP = 12;   // stop early if this many albums have no product links
+const AU_PINNED_ALBUM_GUESS = 8;         // pinned albums to skip when the store page has no titles
 const AU_ALBUM_FETCH_CONCURRENCY = 4;
 const AU_PAGE_LOAD_MS = 20000;           // per Taobao page, unless waiting for the user
 const AU_SCRIPT_TIMEOUT_MS = 8000;       // per read of a Taobao page
@@ -1047,7 +1048,7 @@ const AU_USER_WAIT_MS = 3 * 60 * 1000;   // time to log in or pass the slider
 const AU_BLOCK_CONFIRM_POLLS = 3;        // ~3s before a login page counts
 const AU_LOG_LIMIT = 400;                // debug lines kept for the settings page
 let auCheckChain = Promise.resolve();
-let auActiveRun = null;                  // { tabId, activity, handedToUser, startedAt } for the running check
+let auActiveRun = null;                  // { tabId, activity, handedToUser, startedAt, lastReadError } for the running check
 let auLogPending = [];
 let auLogTimer = null;
 let auLogWrites = Promise.resolve();
@@ -1090,7 +1091,7 @@ function logUrl(url) {
 }
 
 function htmlTitle(html) {
-  return (String(html || '').match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+  return decodeEntities(String(html || '').match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] || '').replace(/\s+/g, ' ').trim().slice(0, 60);
 }
 
 function describeFetch(page) {
@@ -1102,7 +1103,7 @@ function describeFetch(page) {
 function subtitleSnippet(html) {
   const inner = String(html || '').match(/gallerysubtitle[^>]*>([\s\S]{0,800}?)<\/div>/i)?.[1];
   if (inner === undefined) return '(no subtitle)';
-  const text = inner.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+  const text = decodeEntities(inner.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
   return text ? `"${text.slice(0, 80)}"` : '(empty subtitle)';
 }
 
@@ -1370,6 +1371,7 @@ async function handAuTabToUser(tabId) {
 // Read the Taobao tab as it is, without waiting for it to finish loading:
 // heavy pages in a background tab can take a long time to reach "complete",
 // and Chrome can freeze a hidden tab, so each read has a time limit.
+// Resolves to { page } or { page: null, error } with Chrome's reason.
 function readTaobaoTab(tabId) {
   const injection = chrome.scripting.executeScript({
     target: { tabId },
@@ -1377,8 +1379,12 @@ function readTaobaoTab(tabId) {
     args: [AuFreeShip.inspectConfig()],
     world: 'MAIN',
     injectImmediately: true
-  }).then((results) => results?.[0]?.result ?? null, () => null);
-  return Promise.race([injection, sleep(AU_SCRIPT_TIMEOUT_MS).then(() => null)]);
+  }).then(
+    (results) => (results?.[0]?.result ? { page: results[0].result } : { page: null, error: 'the page script returned nothing' }),
+    (error) => ({ page: null, error: String(error?.message || error) })
+  );
+  const timeout = sleep(AU_SCRIPT_TIMEOUT_MS).then(() => ({ page: null, error: `no answer from the page within ${AU_SCRIPT_TIMEOUT_MS / 1000}s` }));
+  return Promise.race([injection, timeout]);
 }
 
 // Load a URL in the check tab and poll until the tag shows up, the page is
@@ -1389,6 +1395,7 @@ async function pollTaobaoPage(url, { itemId = '', wantItems = false } = {}) {
   const run = auActiveRun;
   const previousUrl = run.tabId != null ? (await chrome.tabs.get(run.tabId).catch(() => null))?.url || '' : '';
   const tabId = await navigateCheckTab(url);
+  run.lastReadError = '';
 
   let page = null;
   let deadline = Date.now() + AU_PAGE_LOAD_MS;
@@ -1403,9 +1410,13 @@ async function pollTaobaoPage(url, { itemId = '', wantItems = false } = {}) {
       auLog('  the Taobao tab was closed');
       break;
     }
-    const result = await readTaobaoTab(tabId);
+    const { page: result, error } = await readTaobaoTab(tabId);
+    if (!result) {
+      run.lastReadError = error;
+      continue;
+    }
     // Still the page from before the navigation.
-    if (!result || (result.url === previousUrl && previousUrl !== url)) continue;
+    if (result.url === previousUrl && previousUrl !== url) continue;
     page = result;
 
     // Taobao passes through login.taobao.com for a moment when it refreshes
@@ -1447,7 +1458,17 @@ async function loadAndInspectTaobao(url, options = {}) {
   const page = await pollTaobaoPage(url, options);
   const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
   if (!page) {
-    auLog(`  ${logUrl(url)}: nothing readable after ${seconds}s`);
+    // Say why: which address the tab ended up on (hidden if YuCart has no
+    // access to that site), whether it loaded, and Chrome's last error.
+    const tab = auActiveRun?.tabId != null ? await chrome.tabs.get(auActiveRun.tabId).catch(() => null) : null;
+    const tabState = !tab ? 'tab closed' : [
+      `tab ${tab.status}`,
+      tab.url ? `at ${logUrl(tab.url)}` : 'address hidden (YuCart has no access to that site)',
+      tab.pendingUrl && `loading ${logUrl(tab.pendingUrl)}`,
+      tab.discarded && 'discarded by Chrome',
+      tab.frozen && 'frozen by Chrome'
+    ].filter(Boolean).join(', ');
+    auLog(`  ${logUrl(url)}: nothing readable after ${seconds}s · ${tabState} · last error: ${auActiveRun?.lastReadError || 'none'}`);
     return page;
   }
   const flags = [
@@ -1463,6 +1484,11 @@ async function loadAndInspectTaobao(url, options = {}) {
   return page;
 }
 
+function unreadableNote(kind) {
+  const error = auActiveRun?.lastReadError;
+  return `Couldn't read the Taobao ${kind} page${error ? ` (${error})` : ''}`;
+}
+
 const AU_ITEM_NOTES = {
   not_found: 'No tag on this listing',
   region_unknown: 'The listing didn\'t show delivery to Australia',
@@ -1476,7 +1502,9 @@ async function checkTaobaoItem(itemId) {
   if (page && page.itemId !== itemId && !['security_check', 'login_required'].includes(status)) {
     status = 'error';
   }
-  const note = status === 'eligible' ? `Tag "${page.label.matched}" on listing ${itemId}` : AU_ITEM_NOTES[status] || '';
+  const note = status === 'eligible'
+    ? `Tag "${page.label.matched}" on listing ${itemId}`
+    : !page ? unreadableNote('listing') : AU_ITEM_NOTES[status] || '';
   auLog(`  listing ${itemId}: ${status}`);
   return {
     status,
@@ -1614,7 +1642,7 @@ async function checkTaobaoShop(link) {
     }
     outcome = itemChecks.length
       ? summarizeAuChecks(itemChecks)
-      : { status: 'error', note: page ? 'No listings found on the shop page' : 'The shop page didn\'t load in time' };
+      : { status: 'error', note: page ? 'No listings found on the shop page' : unreadableNote('shop') };
   }
 
   const now = Date.now();
@@ -1661,37 +1689,76 @@ async function checkTaobaoTarget(rawUrl, vendor = '') {
   return check;
 }
 
-// Album URLs come from the page DOM, so only fetch the vendor's own albums.
-function sanitizeVendorAlbumUrls(vendor, albumUrls) {
-  const urls = new Map();
-  for (const raw of Array.isArray(albumUrls) ? albumUrls : []) {
+function decodeEntities(text) {
+  return String(text || '')
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(Number(dec)))
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&');
+}
+
+// Albums from the page the check started on come from that page's DOM, so
+// only keep the vendor's own albums. Entries are URLs or { url, title }.
+function sanitizeVendorAlbums(vendor, albums) {
+  const entries = new Map();
+  for (const raw of Array.isArray(albums) ? albums : []) {
     try {
-      const url = new URL(raw);
-      const albumId = url.pathname.match(/^\/albums\/(\d+)/)?.[1];
-      if (url.protocol === 'https:' && albumId && AuFreeShip.parseYupooVendor(url.href) === vendor && !urls.has(albumId)) {
-        urls.set(albumId, url.href);
+      const url = new URL(typeof raw === 'string' ? raw : raw?.url);
+      const id = url.pathname.match(/^\/albums\/(\d+)/)?.[1];
+      if (url.protocol === 'https:' && id && AuFreeShip.parseYupooVendor(url.href) === vendor && !entries.has(id)) {
+        entries.set(id, { id, url: url.href, title: String(raw?.title || '').replace(/\s+/g, ' ').trim().slice(0, 120) });
       }
     } catch {
       // Ignore malformed URLs.
     }
   }
-  return [...urls.values()];
+  return [...entries.values()];
 }
 
-function albumUrlsFromHtml(vendor, html) {
+// Every album on a Yupoo store page, in page order, with its title.
+function albumEntriesFromHtml(vendor, html) {
   const origin = `https://${vendor}.x.yupoo.com`;
-  const urls = new Map();
-  for (const match of String(html || '').matchAll(/href=["'](?:https?:\/\/[^"'/]+)?(\/albums\/(\d+)[^"']*)["']/g)) {
-    if (!urls.has(match[2])) urls.set(match[2], origin + match[1].replace(/&amp;/g, '&'));
-    if (urls.size >= AU_MAX_ALBUM_FETCHES) break;
+  const source = String(html || '');
+  const entries = new Map();
+  for (const match of source.matchAll(/<a\b([^>]*\bhref=["'](?:https?:\/\/[^"'/]+)?(\/albums\/(\d+)[^"']*)["'][^>]*)>/gi)) {
+    const [, attributes, path, id] = match;
+    if (entries.has(id)) continue;
+    const titleAttribute = attributes.match(/\btitle=["']([^"']*)["']/i)?.[1];
+    const titleNearby = source.slice(match.index, match.index + 2000).match(/album__title[^>]*>([^<]*)</i)?.[1];
+    const title = decodeEntities(titleAttribute || titleNearby || '').replace(/\s+/g, ' ').trim();
+    entries.set(id, { id, url: origin + decodeEntities(path), title });
   }
-  return [...urls.values()];
+  return [...entries.values()];
+}
+
+// Stores pin contact, QC, feedback and notice albums to the top; product
+// links are in the product albums further down, which usually have a price
+// in the title. Albums titled after a store link are read first of all.
+const AU_LINK_ALBUM_RE = /taobao|淘宝|tmall|天猫|weidian|微店|store\s*link|shop\s*link/i;
+const AU_PRICE_ALBUM_RE = /[¥￥$]\s*\d|\d\s*(?:y|yuan|元|rmb|cny|usd|aud)(?![a-z])/i;
+const AU_INFO_ALBUM_RE = /whats\s*app|we\s*chat|微信|telegram|\btg\b|instagram|\bins\b|discord|shopify|contact|联系|\bqc\b|feedback|review|payment|parcel|parcle|物流|about|attention|notice|公告|\bvip\b|factory|real\s*shot|实拍|how\s*to|size\s*chart|尺码/i;
+
+function albumPriority(title) {
+  if (AU_LINK_ALBUM_RE.test(title)) return 0;
+  if (AU_PRICE_ALBUM_RE.test(title)) return 1;
+  if (AU_INFO_ALBUM_RE.test(title)) return 3;
+  return 2;
+}
+
+function rankAlbums(entries) {
+  return entries
+    .map((entry, index) => ({ entry, index, priority: albumPriority(entry.title) }))
+    .sort((a, b) => a.priority - b.priority || a.index - b.index)
+    .map(({ entry }) => entry);
 }
 
 // Find a few Taobao listings for a Yupoo vendor. Links can be anywhere on
 // their pages: the album the check started from, the store page (sellers
-// often put their shop link in the store notice), then their albums.
-async function collectVendorTaobaoLinks(vendor, productUrls, albumUrls) {
+// often put their shop link in the store notice), then product albums.
+async function collectVendorTaobaoLinks(vendor, productUrls, pageAlbums) {
   const taobao = new Map();
   let otherCount = 0;
   const add = (html) => {
@@ -1709,12 +1776,27 @@ async function collectVendorTaobaoLinks(vendor, productUrls, albumUrls) {
   const listUrl = `https://${vendor}.x.yupoo.com/albums`;
   const list = await fetchPage(listUrl);
   const listFound = add(list.text);
-  const listAlbums = albumUrlsFromHtml(vendor, list.text);
-  auLog(`  ${logUrl(list.url || listUrl)}: ${describeFetch(list)} · ${listAlbums.length} albums · ${listFound.taobao.length} Taobao, ${listFound.otherCount} Weidian/1688 links`);
+  const listAlbums = albumEntriesFromHtml(vendor, list.text);
 
-  let albums = sanitizeVendorAlbumUrls(vendor, albumUrls);
-  if (!albums.length) albums = listAlbums;
-  albums = albums.slice(0, AU_MAX_ALBUM_FETCHES);
+  // Albums from the page the check started on, then the store page; keep
+  // whichever copy of an album has a title.
+  const merged = new Map();
+  for (const entry of [...sanitizeVendorAlbums(vendor, pageAlbums), ...listAlbums]) {
+    if (!merged.has(entry.id) || (!merged.get(entry.id).title && entry.title)) merged.set(entry.id, entry);
+  }
+  let candidates = [...merged.values()];
+  const titled = candidates.filter((entry) => entry.title).length;
+  auLog(`  ${logUrl(list.url || listUrl)}: ${describeFetch(list)} · ${listFound.taobao.length} Taobao, ${listFound.otherCount} Weidian/1688 links`);
+  if (candidates.length > AU_PINNED_ALBUM_GUESS && titled < candidates.length / 2) {
+    // Without titles products can't be told apart, but pinned albums always
+    // come first, so start further down the list.
+    candidates = [...candidates.slice(AU_PINNED_ALBUM_GUESS), ...candidates.slice(0, AU_PINNED_ALBUM_GUESS)];
+    auLog(`  only ${titled} of ${candidates.length} albums have titles; skipping the first ${AU_PINNED_ALBUM_GUESS} (usually pinned)`);
+  }
+  const ranked = rankAlbums(candidates);
+  const productCount = ranked.filter((entry) => albumPriority(entry.title) <= 1).length;
+  const albums = ranked.slice(0, AU_MAX_ALBUM_FETCHES);
+  auLog(`  ${merged.size} album${merged.size === 1 ? '' : 's'} found, ${productCount} look like products; reading up to ${albums.length}, products first`);
 
   let albumsRead = 0;
   let albumsWithLinks = 0;
@@ -1725,20 +1807,21 @@ async function collectVendorTaobaoLinks(vendor, productUrls, albumUrls) {
     }
     const group = albums.slice(start, start + AU_ALBUM_FETCH_CONCURRENCY);
     await reportAu({ step: `reading Yupoo albums (${start + group.length} of ${albums.length})` });
-    const pages = await Promise.all(group.map((albumUrl) => fetchPage(albumUrl)));
+    const pages = await Promise.all(group.map((album) => fetchPage(album.url)));
     pages.forEach((page, index) => {
       const found = add(page.text);
       if (page.ok) albumsRead++;
       if (found.taobao.length || found.otherCount) albumsWithLinks++;
-      const albumId = group[index].match(/\/albums\/(\d+)/)?.[1];
-      auLog(`  album ${albumId}: ${describeFetch(page)} · ${found.taobao.length} Taobao, ${found.otherCount} Weidian/1688 · subtitle ${subtitleSnippet(page.text)}`);
+      const album = group[index];
+      const fetched = page.ok ? `HTTP ${page.status}, ${Math.round(page.text.length / 1024)} KB` : describeFetch(page);
+      auLog(`  album ${album.id} "${(album.title || '(untitled)').slice(0, 40)}": ${fetched} · ${found.taobao.length} Taobao, ${found.otherCount} Weidian/1688 · subtitle ${subtitleSnippet(page.text)}`);
     });
   }
   return { taobaoLinks: [...taobao.values()], otherCount, albumsRead, list };
 }
 
-async function checkYupooVendor(vendor, productUrls, albumUrls) {
-  const { taobaoLinks, otherCount, albumsRead, list } = await collectVendorTaobaoLinks(vendor, productUrls, albumUrls);
+async function checkYupooVendor(vendor, productUrls, pageAlbums) {
+  const { taobaoLinks, otherCount, albumsRead, list } = await collectVendorTaobaoLinks(vendor, productUrls, pageAlbums);
   let outcome;
   if (!taobaoLinks.length) {
     if (!albumsRead && !list.ok) {
@@ -1774,7 +1857,8 @@ function auTargetLabel(target, vendor) {
   return 'Taobao share link';
 }
 
-// target: { kind: 'taobao', url, vendor? } or { kind: 'yupoo', vendor, productUrls?, albumUrls? }
+// target: { kind: 'taobao', url, vendor? } or
+//         { kind: 'yupoo', vendor, productUrls?, albums?: [{ url, title }] }
 // openerTabId: the tab the check was started from, to return to afterwards.
 async function runAuFreeShipCheck(target, openerTabId = null) {
   if (!(await isAuFreeShipReady())) return { status: 'permission_required' };
@@ -1794,7 +1878,7 @@ async function runAuFreeShipCheck(target, openerTabId = null) {
   let outcome = { status: 'error' };
   try {
     outcome = target.kind === 'yupoo'
-      ? await checkYupooVendor(vendor, target.productUrls, target.albumUrls)
+      ? await checkYupooVendor(vendor, target.productUrls, target.albums || target.albumUrls)
       : await checkTaobaoTarget(target.url, vendor);
   } catch (error) {
     outcome = { status: 'error', note: `Unexpected error: ${error?.message || error}` };
