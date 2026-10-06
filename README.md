@@ -46,6 +46,20 @@ If your repo structure differs, replace the above entries with the actual file n
 - Open the extension popup while on a Yupoo product/album page and click "Add" to add items to your cart.
 - Open the cart in the popup to manage and export items.
 
+## Taobao AU Free Shipping Finder (beta)
+
+Taobao's Global Free Shipping Plan (全球包邮计划) ships free to Australia once an order reaches ¥249. Sellers opt in, and their qualifying listings show a "境外满包邮" tag when your Taobao delivery address is in Australia. YuCart can check for that tag so you can tell which suppliers take part.
+
+1. Log in to Taobao in Chrome and set your delivery address to Australia.
+2. In YuCart settings, switch on **Taobao AU Free Shipping Finder (Beta)**, allow the taobao.com / tmall.com / tb.cn / reddit.com access it asks for, and save.
+3. Check sellers:
+   - **Yupoo album page**: the pill next to Add to Cart checks that album's Taobao link.
+   - **Any Yupoo store page**: the chip in the bottom-left checks the seller, reading up to 3 Taobao links from their albums. A seller counts as eligible if any of them has the tag.
+   - **r/FashionReps wiki** (or any subreddit wiki): every Taobao shop/item and Yupoo store link gets a badge. Click one badge, or use **Check unchecked** to work through the page.
+4. Eligible sellers are listed in settings under **Free Shipping to Australia**.
+
+Each check opens the listing in a background tab, so it uses your own Taobao session. If Taobao asks you to log in or shows its verification slider, that tab is left open for you; finish it there and check again. Results are stored locally in `chrome.storage.local`. The tag text the checker looks for is in `shared/au-freeship.js` (`LABEL_PATTERNS`) if Taobao changes its wording.
+
 ## Contributing
 
 - Feel free to open issues or pull requests. Describe the behavior you want (automatic detection, batch add, export formats like CSV/JSON).

@@ -17,6 +17,7 @@ YuCart may collect or process the following categories of data:
 - Location data only if you explicitly grant browser geolocation permission for the wardrobe weather feature. YuCart stores cached coordinates locally to reduce repeated prompts.
 - Usage-generated metadata related to AI name-cleaning, such as original product names, cleaned names, store links, product links, vendor names, color, item type, and timestamps.
 - Cached service data, such as exchange-rate data and update-check status.
+- Taobao free-shipping check results, if you use the Taobao AU Free Shipping Finder: Taobao item IDs, shop IDs and shop names, Yupoo store names, whether the free-shipping tag was found, the matched tag text, and timestamps.
 
 ## 2. How YuCart uses data
 
@@ -29,13 +30,14 @@ YuCart uses data to:
 - Fetch optional weather context for wardrobe recommendations.
 - Open and automate checkout flows on supported shopping-agent websites.
 - Check whether a newer version of the extension is available.
+- Check whether Taobao sellers linked from Yupoo or subreddit wiki pages offer free shipping to Australia.
 - Improve product-name cleanup quality by storing cleaned-name records submitted through the extension.
 
 ## 3. Where data is stored
 
 YuCart primarily stores user data in Chrome extension storage on the user's device.
 
-- `chrome.storage.local` is used for cart contents, wardrobe items, saved outfits, cached location, exchange-rate cache, update-check cache, and local-only settings such as AI API keys.
+- `chrome.storage.local` is used for cart contents, wardrobe items, saved outfits, cached location, exchange-rate cache, update-check cache, Taobao free-shipping check results, and local-only settings such as AI API keys.
 - `chrome.storage.sync` may be used for non-sensitive settings and preferences that Chrome can sync across the user's signed-in browser profile.
 
 Users can remove locally stored data by clearing the cart and wardrobe inside the extension, changing settings, or removing the extension.
@@ -81,6 +83,10 @@ When AI name-cleaning is used, YuCart uploads cleaned-name records to a Google F
 
 This backend storage is used to support and improve YuCart's cleaned-name dataset and related features.
 
+### Taobao, Tmall and Reddit
+
+If you turn on the Taobao AU Free Shipping Finder, YuCart asks for access to taobao.com, tmall.com, tb.cn and reddit.com. When you start a check, YuCart opens Taobao or Tmall listing pages in a background tab of your browser, which uses your own Taobao login and delivery address, and reads the page to find the free-shipping tag. On subreddit wiki pages it reads the Taobao and Yupoo links on the page to show results next to them. Check results stay on your device and are not uploaded to YuCart's backend.
+
 ### Supported shopping-agent sites
 
 When you use checkout automation, YuCart opens or builds links for supported third-party agent sites and may include referral or affiliate parameters in those links, as disclosed in the extension settings.
@@ -120,6 +126,7 @@ You can choose whether to:
 - Provide an AI API key
 - Grant location permission
 - Use shopping-agent checkout automation
+- Use the Taobao AU Free Shipping Finder
 
 You can also uninstall the extension at any time to stop future collection and local storage by the extension.
 

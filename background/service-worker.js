@@ -10,6 +10,12 @@ try {
   console.error('[YuCart BG] Failed to load agent checkout config:', error);
 }
 
+try {
+  importScripts('../shared/au-freeship.js');
+} catch (error) {
+  console.error('[YuCart BG] Failed to load AU free shipping config:', error);
+}
+
 const RATE_CACHE_KEY = 'yucart_exchange_rate';
 const RATE_TTL = 6 * 60 * 60 * 1000; // 6 hours
 const CART_KEY = 'yucart_cart';
@@ -22,11 +28,13 @@ const {
   AGENT_CHECKOUT_CONFIG = {},
   getAgentCheckoutConfig = () => null
 } = globalThis.YuCartAgentCheckout || {};
+const AuFreeShip = globalThis.YuCartAuFreeShip || null;
 
 const DEFAULT_SETTINGS = {
   targetCurrency: 'USD',
   darkMode: true,  // Dark mode enabled by default
   betaWardrobeEnabled: false,
+  betaAuFreeShipEnabled: false,
   popupScale: 1
 };
 
@@ -242,35 +250,36 @@ async function addToCart(item) {
   return cart;
 }
 
-// Fetch a Yupoo album page and extract the product source link from the subtitle
+// Fetch a Yupoo album page and return the product source link from its subtitle
+async function fetchAlbumProductLink(albumUrl) {
+  const resp = await fetch(albumUrl, { credentials: 'omit' });
+  if (!resp.ok) return '';
+  const html = await resp.text();
+
+  // Parse the gallerysubtitle anchor's href
+  // Pattern: <a ... href="...external?url=ENCODED_URL..."...> inside gallerysubtitle
+  const subtitleMatch = html.match(
+    /gallerysubtitle[\s\S]*?<a[^>]+href=["']([^"']+)["']/i
+  );
+  if (!subtitleMatch) return '';
+
+  const href = subtitleMatch[1];
+
+  // Unwrap Yupoo redirect: /external?url=<encoded>
+  const urlParam = href.match(/[?&]url=([^&]+)/);
+  if (urlParam) {
+    try {
+      return decodeURIComponent(decodeURIComponent(urlParam[1]));
+    } catch {
+      return decodeURIComponent(urlParam[1]);
+    }
+  }
+  return href;
+}
+
 async function scrapeSubtitle(itemId, albumUrl) {
   try {
-    const resp = await fetch(albumUrl, { credentials: 'omit' });
-    if (!resp.ok) return;
-    const html = await resp.text();
-
-    // Parse the gallerysubtitle anchor's href
-    // Pattern: <a ... href="...external?url=ENCODED_URL..."...> inside gallerysubtitle
-    const subtitleMatch = html.match(
-      /gallerysubtitle[\s\S]*?<a[^>]+href=["']([^"']+)["']/i
-    );
-    if (!subtitleMatch) return;
-
-    const href = subtitleMatch[1];
-    let productUrl = '';
-
-    // Unwrap Yupoo redirect: /external?url=<encoded>
-    const urlParam = href.match(/[?&]url=([^&]+)/);
-    if (urlParam) {
-      try {
-        productUrl = decodeURIComponent(decodeURIComponent(urlParam[1]));
-      } catch {
-        productUrl = decodeURIComponent(urlParam[1]);
-      }
-    } else {
-      productUrl = href;
-    }
-
+    const productUrl = await fetchAlbumProductLink(albumUrl);
     if (!productUrl) return;
 
     // Only store if it's a known source site
@@ -495,12 +504,13 @@ async function waitForTabComplete(tabId, timeoutMs = 30000) {
   });
 }
 
-async function runScriptInTab(tabId, func, args = []) {
+async function runScriptInTab(tabId, func, args = [], world = 'ISOLATED') {
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
       func,
-      args
+      args,
+      world
     });
     return results?.[0]?.result ?? null;
   } catch (error) {
@@ -1006,6 +1016,487 @@ async function handleAgentCheckoutTab(agentId, tabUrl) {
   };
 }
 
+// ── Taobao AU free shipping finder ───────────────────────────
+// Opens Taobao listings in a background tab (so the user's own Taobao
+// login and delivery address apply), looks for the "境外满包邮" tag and
+// caches the answer per item, per Taobao shop and per Yupoo vendor.
+const AU_MAX_ITEMS_PER_CHECK = 3;
+const AU_MAX_ALBUM_FETCHES = 12;
+let auCheckChain = Promise.resolve();
+
+// One check at a time: each one drives a Taobao tab, and opening several
+// Taobao pages at once makes its verification slider more likely.
+function enqueueAuCheck(task) {
+  const run = auCheckChain.then(task);
+  auCheckChain = run.catch(() => {});
+  return run;
+}
+
+async function getAuResults() {
+  const result = await chrome.storage.local.get(AuFreeShip.STORAGE_KEY);
+  return AuFreeShip.normalizeResults(result[AuFreeShip.STORAGE_KEY]);
+}
+
+async function updateAuResults(mutate) {
+  const results = await getAuResults();
+  mutate(results);
+  await chrome.storage.local.set({ [AuFreeShip.STORAGE_KEY]: results });
+}
+
+async function isAuFreeShipReady() {
+  if (!AuFreeShip) return false;
+  const settings = await getSettings();
+  if (settings[AuFreeShip.SETTING_KEY] !== true) return false;
+  return chrome.permissions.contains({ origins: [...AuFreeShip.OPTIONAL_ORIGINS] });
+}
+
+// The wiki script can only be registered once reddit access is granted,
+// so it is added and removed here instead of in the manifest.
+async function syncAuWikiScript() {
+  if (!AuFreeShip) return;
+  try {
+    const wanted = await isAuFreeShipReady();
+    const { id, matches, js, css } = AuFreeShip.WIKI_SCRIPT;
+    const registered = await chrome.scripting.getRegisteredContentScripts({ ids: [id] });
+    if (wanted && !registered.length) {
+      await chrome.scripting.registerContentScripts([
+        { id, matches: [...matches], js: [...js], css: [...css], runAt: 'document_idle' }
+      ]);
+    } else if (!wanted && registered.length) {
+      await chrome.scripting.unregisterContentScripts({ ids: [id] });
+    }
+  } catch (error) {
+    console.warn('[YuCart BG] Failed to sync wiki script:', error?.message || error);
+  }
+}
+
+// Runs inside the Taobao tab. Uses the main world so it can read the
+// page's own data (g_config / __ICE_APP_CONTEXT__) for the shop identity.
+function inspectTaobaoPage(config) {
+  const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const digits = (value) => (/^\d{4,}$/.test(String(value ?? '').trim()) ? String(value).trim() : '');
+  const isVisible = (element) => !!(element && element.getClientRects().length);
+  const escapeRe = (text) => String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const skipTags = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
+  const siteChrome = 'header, nav, footer, #J_SiteNav, #J_SiteFooter, [class*="site-nav" i], [class*="siteNav" i], [class*="footer" i]';
+  const titleArea = 'h1, #J_Title, .tb-main-title, [class*="mainTitle" i], [class*="itemTitle" i]';
+  const labelRes = config.labelPatterns.map((pattern) => new RegExp(pattern.source, pattern.flags));
+  const auRe = new RegExp(config.auContextPatterns.map(escapeRe).join('|'), 'i');
+  const reserved = new Set(config.reservedSubdomains);
+
+  const url = new URL(location.href);
+  const host = url.hostname.toLowerCase();
+  const bodyText = normalize(document.body?.innerText);
+  const lowerText = bodyText.toLowerCase();
+  const hasAny = (patterns) => patterns.some((pattern) => lowerText.includes(String(pattern).toLowerCase()));
+  const matchLabel = (text) => {
+    for (const re of labelRes) {
+      const match = text.match(re);
+      if (match) return match[0];
+    }
+    return '';
+  };
+
+  // Climb a few levels from each text node so tags split across spans
+  // (满<b>249</b>包邮) still match. Site navigation is skipped, and so are
+  // long titles, where sellers sometimes write their own shipping claims.
+  const findLabel = () => {
+    if (!document.body || !matchLabel(bodyText)) return null;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const parent = node.parentElement;
+      if (!parent || skipTags.has(parent.tagName) || !/包邮|shipping/i.test(node.data)) continue;
+      for (let element = parent, depth = 0; element && depth < 4; element = element.parentElement, depth++) {
+        const text = normalize(element.textContent);
+        if (text.length > 200) break;
+        const matched = matchLabel(text);
+        if (!matched) continue;
+        if (isVisible(element) && !element.closest(siteChrome) && !(text.length > 40 && element.closest(titleArea))) {
+          return { matched, text: text.slice(0, 80) };
+        }
+        break;
+      }
+    }
+    return null;
+  };
+
+  // The tag only shows when Taobao is delivering to Australia, so a missing
+  // tag means nothing unless the page shows an Australian destination.
+  const hasAuDelivery = () => {
+    if (!document.body) return false;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const parent = node.parentElement;
+      if (!parent || skipTags.has(parent.tagName) || !auRe.test(node.data)) continue;
+      if (isVisible(parent) && !parent.closest(siteChrome)) return true;
+    }
+    return false;
+  };
+
+  const identity = { shopId: '', sellerId: '', storeHost: '', shopName: '' };
+  const absorb = (source) => {
+    if (!source || typeof source !== 'object') return;
+    identity.shopId ||= digits(source.shopId);
+    identity.sellerId ||= digits(source.sellerId ?? source.userId);
+    if (!identity.shopName && typeof source.shopName === 'string') identity.shopName = normalize(source.shopName).slice(0, 60);
+  };
+  try { absorb(window.g_config); } catch { /* not an older detail page */ }
+  try {
+    // The item's own seller sits nearer the root than recommended items,
+    // so search breadth-first.
+    const queue = [[window.__ICE_APP_CONTEXT__, 0]];
+    for (let index = 0; index < queue.length && index < 4000 && !identity.shopId; index++) {
+      const [value, depth] = queue[index];
+      if (!value || typeof value !== 'object' || depth > 8) continue;
+      if (value.seller && typeof value.seller === 'object') absorb(value.seller);
+      if (queue.length < 20000) {
+        for (const key of Object.keys(value)) queue.push([value[key], depth + 1]);
+      }
+    }
+  } catch { /* not a newer detail page */ }
+
+  const shopAnchors = Array.from(document.querySelectorAll('[class*="shop" i] a[href], a[href][class*="shop" i]'));
+  for (const anchor of shopAnchors) {
+    const href = anchor.href || '';
+    identity.shopId ||= digits(href.match(/\/\/shop(\d+)\.(?:m\.)?taobao\.com/i)?.[1]);
+    identity.sellerId ||= digits(href.match(/[?&]user_number_id=(\d+)/i)?.[1]);
+    const store = href.toLowerCase().match(/^https?:\/\/([a-z0-9-]+)\.(taobao|tmall)\.com(?:[/?#]|$)/);
+    if (!identity.storeHost && store && !reserved.has(store[1]) && !/^shop\d+$/.test(store[1])) {
+      identity.storeHost = `${store[1]}.${store[2]}.com`;
+    }
+  }
+  // On a shop page the page itself is the shop.
+  const ownShopId = digits(host.match(/^shop(\d+)\.(?:m\.)?taobao\.com$/)?.[1]);
+  const ownSubdomain = host.replace(/\.(?:taobao|tmall)\.com$/, '');
+  if (ownShopId) {
+    identity.shopId = ownShopId;
+  } else if (ownSubdomain !== host && !ownSubdomain.includes('.') && !reserved.has(ownSubdomain)) {
+    identity.storeHost = host;
+  }
+
+  const isItemPage = /^(?:[a-z]+\.)?(?:item|detail)\./.test(host) || /\/item\//.test(url.pathname);
+  const itemId = isItemPage
+    ? digits(url.searchParams.get('id')) || digits(url.pathname.match(/\/item\/(\d+)\.htm/)?.[1])
+    : '';
+  const itemIds = [];
+  if (!itemId) {
+    for (const anchor of document.querySelectorAll('a[href*="id="]')) {
+      const id = digits((anchor.href || '').match(/(?:item\.taobao\.com|detail\.tmall\.com)\/item\.htm\?(?:[^#]*&)?id=(\d+)/i)?.[1]);
+      if (id && !itemIds.includes(id)) itemIds.push(id);
+      if (itemIds.length >= 12) break;
+    }
+  }
+
+  const label = findLabel();
+  const loginFrame = Array.from(document.querySelectorAll('iframe[src*="login."], iframe[src*="passport."]')).some((frame) => {
+    const rect = frame.getBoundingClientRect();
+    return rect.width > 100 && rect.height > 100;
+  });
+
+  return {
+    url: location.href,
+    itemId,
+    itemIds,
+    identity,
+    label,
+    ready: bodyText.length > 200 && /[¥￥]\s*\d/.test(bodyText),
+    auDelivery: !!label || hasAuDelivery(),
+    security: /_____tmd_____|\/punish/i.test(location.href) || hasAny(config.securityPatterns),
+    login: /^(?:login|passport)\./.test(host) || loginFrame,
+    unavailable: hasAny(config.unavailablePatterns)
+  };
+}
+
+function auStatusFromPage(page) {
+  if (!page) return 'error';
+  if (page.label) return 'eligible';
+  if (page.security) return 'security_check';
+  if (page.login) return 'login_required';
+  if (page.unavailable) return 'unavailable';
+  if (!page.ready) return 'error';
+  return page.auDelivery ? 'not_found' : 'region_unknown';
+}
+
+// Load a URL in the check tab and poll until the tag shows up, the page is
+// clearly blocked, or it has rendered for a few polls without the tag.
+async function loadAndInspectTaobao(tabId, url, { itemId = '', wantItems = false } = {}) {
+  await chrome.tabs.update(tabId, { url });
+  await sleep(300);
+  await waitForTabComplete(tabId);
+
+  let page = null;
+  let settledPolls = 0;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    await sleep(attempt === 0 ? 1500 : 1000);
+    const result = await runScriptInTab(tabId, inspectTaobaoPage, [AuFreeShip.inspectConfig()], 'MAIN');
+    if (!result) continue;
+    page = result;
+    if (page.security || page.login) return page;
+    // Ignore the previous page or a redirect to a different listing.
+    if (itemId && page.itemId !== itemId) continue;
+    if (page.label || page.unavailable) return page;
+    const settled = wantItems ? page.itemIds.length > 0 : page.ready;
+    if (settled && ++settledPolls >= 3) return page;
+  }
+  return page;
+}
+
+async function checkTaobaoItemInTab(tabId, itemId) {
+  const page = await loadAndInspectTaobao(tabId, AuFreeShip.itemUrl(itemId), { itemId });
+  let status = auStatusFromPage(page);
+  if (page && page.itemId !== itemId && !['security_check', 'login_required'].includes(status)) {
+    status = 'error';
+  }
+  return {
+    status,
+    itemId,
+    matched: page?.label?.matched || '',
+    identity: page?.identity || null
+  };
+}
+
+// Short links (m.tb.cn) only reveal the item or shop once they redirect.
+async function resolveTaobaoShortLink(tabId, shortUrl) {
+  await chrome.tabs.update(tabId, { url: shortUrl });
+  for (let attempt = 0; attempt < 15; attempt++) {
+    await sleep(800);
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab) return { status: 'error' };
+    const currentUrl = tab.pendingUrl || tab.url || '';
+    if (/^https?:\/\/(?:login|passport)\./i.test(currentUrl)) return { status: 'login_required' };
+    const link = AuFreeShip.parseTaobaoLink(currentUrl);
+    if (link && link.type !== 'short') return { link };
+  }
+  return { status: 'error' };
+}
+
+// Most informative outcome of several item checks: any tagged item means the
+// seller is in the program; a blocker means the rest could not be checked.
+function summarizeAuChecks(checks) {
+  const eligible = checks.find((check) => check.status === 'eligible');
+  if (eligible) return eligible;
+  const blocked = checks.find((check) => AuFreeShip.BLOCKING_STATUSES.includes(check.status));
+  if (blocked) return { status: blocked.status };
+  const notFound = checks.filter((check) => check.status === 'not_found');
+  if (notFound.length) return { ...notFound[0], checkedItems: notFound.length };
+  return { status: checks.length ? checks[checks.length - 1].status : 'no_links' };
+}
+
+function auRecord(check, now) {
+  return {
+    status: check.status,
+    matched: check.matched || '',
+    itemId: check.itemId || '',
+    shopKeys: AuFreeShip.shopKeys(check.identity),
+    shopName: check.identity?.shopName || '',
+    checkedItems: check.checkedItems || (check.itemId ? 1 : 0),
+    checkedAt: now
+  };
+}
+
+// A single tagged item proves the shop takes part; a single untagged one
+// only fills in shops nobody has checked yet.
+function recordAuItem(results, check, now) {
+  if (!check.itemId || !AuFreeShip.STORED_STATUSES.includes(check.status)) return;
+  const record = auRecord(check, now);
+  results.items[check.itemId] = record;
+  for (const key of record.shopKeys) {
+    if (check.status === 'eligible' || !results.shops[key]) {
+      results.shops[key] = record;
+    }
+  }
+}
+
+function recordAuVendor(results, vendor, check, now, { replaceEligible = true } = {}) {
+  if (!vendor || !AuFreeShip.STORED_STATUSES.includes(check.status)) return;
+  const existing = results.vendors[vendor];
+  if (!replaceEligible && existing?.status === 'eligible' && check.status !== 'eligible') return;
+  results.vendors[vendor] = auRecord(check, now);
+}
+
+async function checkTaobaoShopInTab(tabId, link) {
+  const shopHost = link.shopId ? `shop${link.shopId}.taobao.com` : link.storeHost;
+  const pageUrls = [link.url];
+  if (shopHost) pageUrls.push(`https://${shopHost}/search.htm`);
+
+  // Shop home pages sometimes lazy-load their items; the search page lists them.
+  let page = null;
+  for (const pageUrl of pageUrls) {
+    page = await loadAndInspectTaobao(tabId, pageUrl, { wantItems: true });
+    if (!page || page.label || page.security || page.login || page.itemIds.length) break;
+  }
+
+  const identity = {
+    shopId: link.shopId || page?.identity?.shopId || '',
+    sellerId: link.sellerId || page?.identity?.sellerId || '',
+    storeHost: link.storeHost || page?.identity?.storeHost || '',
+    shopName: page?.identity?.shopName || ''
+  };
+  if (page?.security) return { status: 'security_check' };
+  if (page?.login) return { status: 'login_required' };
+
+  const itemChecks = [];
+  let outcome;
+  if (page?.label) {
+    outcome = { status: 'eligible', matched: page.label.matched };
+  } else {
+    for (const itemId of (page?.itemIds || []).slice(0, AU_MAX_ITEMS_PER_CHECK)) {
+      const check = await checkTaobaoItemInTab(tabId, itemId);
+      itemChecks.push(check);
+      if (check.status === 'eligible' || AuFreeShip.BLOCKING_STATUSES.includes(check.status)) break;
+    }
+    outcome = itemChecks.length ? summarizeAuChecks(itemChecks) : { status: page ? 'no_links' : 'error' };
+  }
+
+  const now = Date.now();
+  await updateAuResults((results) => {
+    for (const check of itemChecks) recordAuItem(results, check, now);
+    // An explicit shop check replaces whatever was inferred from single items.
+    if (outcome.status === 'eligible' || outcome.status === 'not_found') {
+      const record = auRecord({ ...outcome, identity }, now);
+      for (const key of record.shopKeys) results.shops[key] = record;
+    }
+  });
+  return { ...outcome, identity };
+}
+
+async function checkTaobaoTargetInTab(tabId, rawUrl, vendor = '') {
+  let link = AuFreeShip.parseTaobaoLink(rawUrl);
+  if (!link) return { status: 'no_links' };
+
+  let shortUrl = '';
+  if (link.type === 'short') {
+    shortUrl = link.url;
+    const resolved = await resolveTaobaoShortLink(tabId, shortUrl);
+    if (!resolved.link) return { status: resolved.status };
+    link = resolved.link;
+  }
+
+  if (link.type === 'shop') {
+    const outcome = await checkTaobaoShopInTab(tabId, link);
+    if (vendor) {
+      await updateAuResults((results) => recordAuVendor(results, vendor, outcome, Date.now(), { replaceEligible: false }));
+    }
+    return outcome;
+  }
+
+  const check = await checkTaobaoItemInTab(tabId, link.itemId);
+  const now = Date.now();
+  await updateAuResults((results) => {
+    recordAuItem(results, check, now);
+    if (shortUrl && AuFreeShip.STORED_STATUSES.includes(check.status)) {
+      results.shortLinks[shortUrl] = link.itemId;
+    }
+    if (vendor) recordAuVendor(results, vendor, check, now, { replaceEligible: false });
+  });
+  return check;
+}
+
+// Album URLs come from the page DOM, so only fetch the vendor's own albums.
+function sanitizeVendorAlbumUrls(vendor, albumUrls) {
+  const urls = new Map();
+  for (const raw of Array.isArray(albumUrls) ? albumUrls : []) {
+    try {
+      const url = new URL(raw);
+      const albumId = url.pathname.match(/^\/albums\/(\d+)/)?.[1];
+      if (url.protocol === 'https:' && albumId && AuFreeShip.parseYupooVendor(url.href) === vendor && !urls.has(albumId)) {
+        urls.set(albumId, url.href);
+      }
+    } catch {
+      // Ignore malformed URLs.
+    }
+  }
+  return [...urls.values()];
+}
+
+async function fetchYupooAlbumUrls(vendor) {
+  const origin = `https://${vendor}.x.yupoo.com`;
+  try {
+    const resp = await fetch(`${origin}/albums`, { credentials: 'omit' });
+    if (!resp.ok) return [];
+    const html = await resp.text();
+    const urls = new Map();
+    for (const match of html.matchAll(/href=["'](\/albums\/(\d+)[^"']*)["']/g)) {
+      if (!urls.has(match[2])) urls.set(match[2], origin + match[1].replace(/&amp;/g, '&'));
+      if (urls.size >= AU_MAX_ALBUM_FETCHES) break;
+    }
+    return [...urls.values()];
+  } catch {
+    return [];
+  }
+}
+
+// Find a few Taobao listings for a Yupoo vendor from their album subtitles.
+async function collectVendorTaobaoLinks(vendor, productUrls, albumUrls) {
+  const taobaoLinks = [];
+  let otherLinks = 0;
+  const add = (text) => {
+    const taobaoLink = AuFreeShip.extractTaobaoLink(text);
+    if (taobaoLink) {
+      if (!taobaoLinks.includes(taobaoLink)) taobaoLinks.push(taobaoLink);
+    } else if (/weidian\.com|1688\.com/i.test(text || '')) {
+      otherLinks++;
+    }
+  };
+
+  (Array.isArray(productUrls) ? productUrls : []).forEach(add);
+  let albums = sanitizeVendorAlbumUrls(vendor, albumUrls);
+  if (!albums.length) albums = await fetchYupooAlbumUrls(vendor);
+  for (const albumUrl of albums.slice(0, AU_MAX_ALBUM_FETCHES)) {
+    if (taobaoLinks.length >= AU_MAX_ITEMS_PER_CHECK) break;
+    try {
+      add(await fetchAlbumProductLink(albumUrl));
+    } catch {
+      // Skip albums that fail to load.
+    }
+  }
+  return { taobaoLinks, otherLinks };
+}
+
+async function checkYupooVendorInTab(tabId, vendor, productUrls, albumUrls) {
+  const { taobaoLinks, otherLinks } = await collectVendorTaobaoLinks(vendor, productUrls, albumUrls);
+  let outcome;
+  if (!taobaoLinks.length) {
+    outcome = { status: otherLinks ? 'not_taobao' : 'no_links' };
+  } else {
+    const checks = [];
+    for (const link of taobaoLinks.slice(0, AU_MAX_ITEMS_PER_CHECK)) {
+      const check = await checkTaobaoTargetInTab(tabId, link);
+      checks.push(check);
+      if (check.status === 'eligible' || AuFreeShip.BLOCKING_STATUSES.includes(check.status)) break;
+    }
+    outcome = summarizeAuChecks(checks);
+  }
+  await updateAuResults((results) => recordAuVendor(results, vendor, outcome, Date.now()));
+  return outcome;
+}
+
+// target: { kind: 'taobao', url, vendor? } or { kind: 'yupoo', vendor, productUrls?, albumUrls? }
+async function runAuFreeShipCheck(target) {
+  if (!(await isAuFreeShipReady())) return { status: 'permission_required' };
+
+  const vendor = /^[a-z0-9-]{1,64}$/.test(String(target?.vendor || '')) ? target.vendor : '';
+  if (target?.kind === 'yupoo' && !vendor) return { status: 'no_links' };
+  if (target?.kind !== 'yupoo' && !AuFreeShip.parseTaobaoLink(target?.url)) return { status: 'no_links' };
+
+  const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
+  let outcome = { status: 'error' };
+  try {
+    outcome = target.kind === 'yupoo'
+      ? await checkYupooVendorInTab(tab.id, vendor, target.productUrls, target.albumUrls)
+      : await checkTaobaoTargetInTab(tab.id, target.url, vendor);
+    return outcome;
+  } finally {
+    // Leave Taobao in front when the user has to log in or pass the slider.
+    if (outcome.status === 'login_required' || outcome.status === 'security_check') {
+      chrome.tabs.update(tab.id, { active: true }).catch(() => {});
+      chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+    } else {
+      chrome.tabs.remove(tab.id).catch(() => {});
+    }
+  }
+}
+
 // ── Badge ────────────────────────────────────────────────────
 function updateBadge(cart) {
   const count = cart.reduce((sum, i) => sum + i.quantity, 0);
@@ -1020,6 +1511,7 @@ chrome.runtime.onStartup?.addListener(async () => {
   await updateImageRules();
   checkForUpdates();
   scheduleUpdateAlarm();
+  syncAuWikiScript();
 });
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -1030,7 +1522,16 @@ chrome.runtime.onInstalled.addListener(async () => {
   await updateImageRules();
   checkForUpdates();
   scheduleUpdateAlarm();
+  syncAuWikiScript();
 });
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'sync' && changes[SETTINGS_KEY]) {
+    syncAuWikiScript();
+  }
+});
+chrome.permissions.onAdded.addListener(() => syncAuWikiScript());
+chrome.permissions.onRemoved.addListener(() => syncAuWikiScript());
 
 // ── Message handler ──────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -1228,6 +1729,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           }
           const outfits = await deleteOutfit(msg.outfitId);
           sendResponse({ success: true, outfits });
+          break;
+        }
+        case 'auFreeShipCheck': {
+          if (!AuFreeShip) {
+            sendResponse({ status: 'error' });
+            break;
+          }
+          const outcome = await enqueueAuCheck(() => runAuFreeShipCheck(msg.target));
+          sendResponse(outcome);
           break;
         }
         case 'agentCheckoutTab': {

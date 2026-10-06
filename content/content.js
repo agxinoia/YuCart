@@ -23,6 +23,9 @@
     let targetCurrency = 'USD';
     let darkModeEnabled = true;
     let wardrobeBetaEnabled = false;
+    const AuFreeShip = globalThis.YuCartAuFreeShip || null;
+    let auFreeShipEnabled = false;
+    let auResults = null;
 
     // ── Cleanup when extension is reloaded ─────────────────────
     let observer = null;
@@ -145,6 +148,7 @@
                 targetCurrency = resp.settings.targetCurrency || 'USD';
                 applyDarkMode(resp.settings.darkMode !== false);
                 applyWardrobeFeature(resp.settings.betaWardrobeEnabled === true);
+                await applyAuFreeShipFeature(resp.settings.betaAuFreeShipEnabled === true);
             }
 
             const rateResp = await chrome.runtime.sendMessage({ action: 'getRate', currency: targetCurrency });
@@ -177,6 +181,10 @@
     // ── Listen for settings changes ────────────────────────────
     function handleSettingsChange(changes, area) {
         try {
+            if (area === 'local' && AuFreeShip && changes[AuFreeShip.STORAGE_KEY]) {
+                auResults = AuFreeShip.normalizeResults(changes[AuFreeShip.STORAGE_KEY].newValue);
+                renderAuFreeShip();
+            }
             if (area === 'sync' && changes.yucart_settings) {
                 const newSettings = changes.yucart_settings.newValue;
                 if (newSettings) {
@@ -186,6 +194,9 @@
                     }
                     if (newSettings.betaWardrobeEnabled !== undefined) {
                         applyWardrobeFeature(newSettings.betaWardrobeEnabled);
+                    }
+                    if (newSettings.betaAuFreeShipEnabled !== undefined) {
+                        applyAuFreeShipFeature(newSettings.betaAuFreeShipEnabled);
                     }
                     // Update currency if changed
                     if (newSettings.targetCurrency && newSettings.targetCurrency !== targetCurrency) {
@@ -574,6 +585,7 @@
         } else {
             document.body.prepend(bar);
         }
+        renderAuFreeShip();
     }
 
     // ══════════════════════════════════════════════════════════
@@ -670,12 +682,177 @@
         }
     }
 
+    // ══════════════════════════════════════════════════════════
+    //  TAOBAO AU FREE SHIPPING  (beta)
+    // ══════════════════════════════════════════════════════════
+    // A pill in the detail bar for the album's own Taobao link, and a chip
+    // showing whether this seller's Taobao shop ships free to Australia.
+    const AU_CHIP_HIDDEN_KEY = 'yucart_au_chip_hidden';
+    const auPending = { item: '', vendor: '' };
+
+    async function applyAuFreeShipFeature(enabled) {
+        auFreeShipEnabled = enabled === true && !!AuFreeShip;
+        if (!auFreeShipEnabled) {
+            document.querySelectorAll('.yucart-au-pill, .yucart-au-chip').forEach((el) => el.remove());
+            return;
+        }
+        try {
+            const stored = await chrome.storage.local.get(AuFreeShip.STORAGE_KEY);
+            auResults = AuFreeShip.normalizeResults(stored[AuFreeShip.STORAGE_KEY]);
+        } catch {
+            auResults = AuFreeShip.emptyResults();
+        }
+        renderAuFreeShip();
+    }
+
+    function getVendorSlug() {
+        return AuFreeShip?.parseYupooVendor(window.location.href) || '';
+    }
+
+    function getAuItemLink() {
+        return detailPageItemData ? AuFreeShip.extractTaobaoLink(detailPageItemData.subtitle) : '';
+    }
+
+    function isAuChipHidden() {
+        try {
+            return sessionStorage.getItem(AU_CHIP_HIDDEN_KEY) === '1';
+        } catch {
+            return false;
+        }
+    }
+
+    function auTooltip(status, record) {
+        const lines = [AuFreeShip.describeStatus(status).detail];
+        if (record?.matched) lines.push(`Matched: ${record.matched}`);
+        if (record?.shopName) lines.push(`Shop: ${record.shopName}`);
+        if (record?.checkedAt) lines.push(`Checked ${new Date(record.checkedAt).toLocaleDateString()}`);
+        if (status !== 'checking' && status !== 'unchecked') lines.push('Click to check again');
+        return lines.join('\n');
+    }
+
+    function renderAuFreeShip() {
+        if (!auFreeShipEnabled || !auResults || !document.body) return;
+        renderAuItemPill();
+        renderAuVendorChip();
+    }
+
+    function renderAuItemPill() {
+        const bar = document.querySelector('.yucart-detail-bar');
+        const link = getAuItemLink();
+        let pill = bar?.querySelector('.yucart-au-pill');
+        if (!bar || !link) {
+            pill?.remove();
+            return;
+        }
+        if (!pill) {
+            pill = document.createElement('button');
+            pill.type = 'button';
+            pill.className = 'yucart-au-pill';
+            pill.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                checkAuItem();
+            });
+            bar.insertBefore(pill, bar.querySelector('.yucart-add-btn'));
+        }
+        const record = AuFreeShip.lookupTaobaoLink(auResults, AuFreeShip.parseTaobaoLink(link));
+        const status = auPending.item || record?.status || 'unchecked';
+        pill.dataset.tone = AuFreeShip.describeStatus(status).tone;
+        pill.textContent = AuFreeShip.describeStatus(status).label;
+        pill.title = auTooltip(status, record);
+    }
+
+    function renderAuVendorChip() {
+        const vendor = getVendorSlug();
+        let chip = document.querySelector('.yucart-au-chip');
+        if (!vendor || isAuChipHidden()) {
+            chip?.remove();
+            return;
+        }
+        if (!chip) {
+            chip = document.createElement('div');
+            chip.className = 'yucart-au-chip';
+            chip.innerHTML = `
+          <button type="button" class="yucart-au-chip__main">
+            <span class="yucart-au-chip__eyebrow">Seller · Taobao to AU</span>
+            <span class="yucart-au-chip__label"></span>
+          </button>
+          <button type="button" class="yucart-au-chip__close" title="Hide for this session">×</button>
+        `;
+            chip.querySelector('.yucart-au-chip__main').addEventListener('click', checkAuVendor);
+            chip.querySelector('.yucart-au-chip__close').addEventListener('click', () => {
+                try { sessionStorage.setItem(AU_CHIP_HIDDEN_KEY, '1'); } catch { /* storage blocked */ }
+                chip.remove();
+            });
+            document.body.appendChild(chip);
+        }
+        const record = auResults.vendors[vendor];
+        const status = auPending.vendor || record?.status || 'unchecked';
+        chip.dataset.tone = AuFreeShip.describeStatus(status).tone;
+        chip.querySelector('.yucart-au-chip__label').textContent = AuFreeShip.describeStatus(status).label;
+        chip.querySelector('.yucart-au-chip__main').title = auTooltip(status, record);
+    }
+
+    // Album links on this page, so the background check can find the
+    // seller's Taobao listings without loading their whole store.
+    function collectAlbumUrls() {
+        const urls = new Map();
+        for (const anchor of document.querySelectorAll('a[href*="/albums/"]')) {
+            const albumId = anchor.href.match(/^https:\/\/[^/]+\/albums\/(\d+)/)?.[1];
+            if (albumId && !urls.has(albumId) && anchor.hostname === window.location.hostname) {
+                urls.set(albumId, anchor.href.split('#')[0]);
+            }
+            if (urls.size >= 20) break;
+        }
+        return [...urls.values()];
+    }
+
+    async function sendAuCheck(target) {
+        try {
+            const outcome = await chrome.runtime.sendMessage({ action: 'auFreeShipCheck', target });
+            return outcome?.status ? outcome : { status: 'error' };
+        } catch (e) {
+            if (e.message?.includes('Extension context invalidated')) cleanup();
+            return { status: 'error' };
+        }
+    }
+
+    // Cached results come back through storage.onChanged; only statuses that
+    // are not cached (login, slider, region) are kept here.
+    async function runAuCheck(slot, target) {
+        if (auPending[slot] === 'checking') return;
+        auPending[slot] = 'checking';
+        renderAuFreeShip();
+        const outcome = await sendAuCheck(target);
+        auPending[slot] = AuFreeShip.STORED_STATUSES.includes(outcome.status) ? '' : outcome.status;
+        renderAuFreeShip();
+    }
+
+    function checkAuItem() {
+        const link = getAuItemLink();
+        if (link) runAuCheck('item', { kind: 'taobao', url: link, vendor: getVendorSlug() });
+    }
+
+    function checkAuVendor() {
+        const vendor = getVendorSlug();
+        if (!vendor) return;
+        // The chip can be clicked before the detail page scan has run.
+        const subtitle = detailPageItemData?.subtitle || getGallerySubtitle();
+        runAuCheck('vendor', {
+            kind: 'yupoo',
+            vendor,
+            productUrls: subtitle ? [subtitle] : [],
+            albumUrls: collectAlbumUrls()
+        });
+    }
+
     // ── Main scan ──────────────────────────────────────────────
     async function scanPage() {
         processAlbumListings();
         await processDetailPage();
         processIndexPage();
         processImageViewer();
+        renderAuFreeShip();
     }
 
     function scanRoot(root) {

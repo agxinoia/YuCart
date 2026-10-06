@@ -373,6 +373,52 @@ body {
     color: var(--text-primary);
 }
 
+/* ── Taobao AU Free Shipping Results ─────────────────────────── */
+.field__hint--warn {
+    color: #ffb35c;
+}
+
+.au-results {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.au-results__row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px 12px;
+    background: var(--green-soft);
+    border: 1px solid rgba(46, 204, 113, 0.25);
+    border-radius: var(--radius-sm);
+}
+
+.au-results__name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--green);
+    text-decoration: none;
+}
+
+.au-results__name:hover {
+    text-decoration: underline;
+}
+
+.au-results__meta {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.au-results__empty {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.au-results__actions {
+    margin-top: 12px;
+}
+
 /* ── Collapsible Card ────────────────────────────────────────── */
 .card--collapsible {
     cursor: pointer;

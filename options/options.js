@@ -7,6 +7,7 @@ const LOCAL_SETTINGS_KEY = 'yucart_local_settings';
 const DEFAULT_POPUP_SCALE = 1;
 const POPUP_SCALE_MIN = 0.8;
 const POPUP_SCALE_MAX = 1.25;
+const AuFreeShip = globalThis.YuCartAuFreeShip || null;
 const SUPPORT_AFFILIATE_LINKS = {
     superbuy: {
         name: 'Superbuy',
@@ -75,6 +76,7 @@ async function init() {
         darkMode: true,
         betaWardrobeEnabled: false,
         betaAutoCheckoutEnabled: false,
+        betaAuFreeShipEnabled: false,
         popupScale: DEFAULT_POPUP_SCALE,
         ...(syncResult[SETTINGS_KEY] || {}),
         ...(localResult[LOCAL_SETTINGS_KEY] || {})
@@ -105,6 +107,7 @@ async function init() {
     if (betaAutoCheckoutCheckbox) {
         betaAutoCheckoutCheckbox.checked = settings.betaAutoCheckoutEnabled === true;
     }
+    await initAuFreeShip(settings.betaAuFreeShipEnabled === true);
 
     // Set AI provider and API key
     const providerSelect = document.getElementById('aiProvider');
@@ -192,6 +195,7 @@ async function save() {
         darkMode: document.getElementById('darkMode').checked,
         betaWardrobeEnabled: document.getElementById('betaWardrobeEnabled').checked,
         betaAutoCheckoutEnabled: document.getElementById('betaAutoCheckoutEnabled') ? document.getElementById('betaAutoCheckoutEnabled').checked : false,
+        betaAuFreeShipEnabled: document.getElementById('betaAuFreeShipEnabled').checked,
         aiProvider: document.getElementById('aiProvider').value
     };
 
@@ -212,6 +216,129 @@ async function save() {
     status.textContent = '✓ Saved';
     status.classList.add('save-status--visible');
     setTimeout(() => status.classList.remove('save-status--visible'), 2000);
+}
+
+// ── Taobao AU Free Shipping Finder ───────────────────────────
+async function initAuFreeShip(enabled) {
+    const toggle = document.getElementById('betaAuFreeShipEnabled');
+    if (!AuFreeShip) {
+        toggle.disabled = true;
+        return;
+    }
+
+    const granted = await chrome.permissions.contains({ origins: [...AuFreeShip.OPTIONAL_ORIGINS] });
+    toggle.checked = enabled && granted;
+    if (enabled && !granted) {
+        showAuHint('Taobao/Reddit access was removed. Switch this on again to re-grant it, then save.');
+    }
+
+    toggle.addEventListener('change', handleAuToggle);
+    document.getElementById('clearAuResults').addEventListener('click', clearAuResults);
+    chrome.storage.onChanged.addListener((changes, area) => {
+        if (area === 'local' && changes[AuFreeShip.STORAGE_KEY]) {
+            renderAuResults(changes[AuFreeShip.STORAGE_KEY].newValue);
+        }
+    });
+
+    const stored = await chrome.storage.local.get(AuFreeShip.STORAGE_KEY);
+    renderAuResults(stored[AuFreeShip.STORAGE_KEY]);
+}
+
+async function handleAuToggle(event) {
+    const toggle = event.target;
+    showAuHint('');
+    if (!toggle.checked) return;
+
+    // Request before any other await: Chrome only allows it during the click.
+    let granted = false;
+    try {
+        granted = await chrome.permissions.request({ origins: [...AuFreeShip.OPTIONAL_ORIGINS] });
+    } catch (error) {
+        console.warn('[YuCart] Permission request failed:', error);
+    }
+    if (!granted) {
+        toggle.checked = false;
+        showAuHint('YuCart needs Taobao and Reddit access to check listings.');
+        return;
+    }
+    showAuHint('Access granted. Click Save Settings to turn it on.');
+}
+
+function showAuHint(text) {
+    const hint = document.getElementById('auFreeShipHint');
+    hint.textContent = text;
+    hint.hidden = !text;
+}
+
+function parseAuShopKey(key) {
+    const separator = key.indexOf(':');
+    return { type: key.slice(0, separator), value: key.slice(separator + 1) };
+}
+
+function auShopUrl(key) {
+    const { type, value } = parseAuShopKey(key);
+    if (type === 'shop') return `https://shop${value}.taobao.com/`;
+    if (type === 'host') return `https://${value}/`;
+    if (type === 'seller') return `https://store.taobao.com/shop/view_shop.htm?user_number_id=${value}`;
+    return '';
+}
+
+function auShopLabel(key) {
+    const { type, value } = parseAuShopKey(key);
+    if (type === 'shop') return `shop${value}.taobao.com`;
+    if (type === 'host') return value;
+    return `Taobao seller ${value}`;
+}
+
+// Shops are stored under every key they can be looked up by; list each once.
+function uniqueAuShops(shops) {
+    const unique = new Map();
+    for (const [key, record] of Object.entries(shops)) {
+        const id = record.shopKeys?.[0] || key;
+        if (!unique.has(id)) unique.set(id, { key: id, record });
+    }
+    return [...unique.values()];
+}
+
+function renderAuResults(value) {
+    const results = AuFreeShip.normalizeResults(value);
+    const vendors = Object.entries(results.vendors);
+    const shops = uniqueAuShops(results.shops);
+    const itemCount = Object.keys(results.items).length;
+    document.getElementById('auResultsCard').hidden = !vendors.length && !shops.length && !itemCount;
+
+    const rows = [];
+    for (const [vendor, record] of vendors) {
+        if (record.status !== 'eligible') continue;
+        const shop = record.shopName ? ` · Taobao shop ${record.shopName}` : '';
+        rows.push(auResultRow(vendor, `https://${vendor}.x.yupoo.com/albums`, `Yupoo seller${shop}`, record));
+    }
+    for (const { key, record } of shops) {
+        if (record.status !== 'eligible') continue;
+        rows.push(auResultRow(record.shopName || auShopLabel(key), auShopUrl(key), 'Taobao shop', record));
+    }
+
+    document.getElementById('auResultsSummary').textContent =
+        `${rows.length} of ${vendors.length + shops.length} sellers checked ship free to Australia on ¥${AuFreeShip.THRESHOLD_CNY}+ orders (${itemCount} Taobao listings checked).`;
+    document.getElementById('auResultsList').innerHTML = rows.length
+        ? rows.join('')
+        : '<p class="au-results__empty">No sellers with the tag yet. Check sellers from a Yupoo store or the r/FashionReps wiki.</p>';
+}
+
+function auResultRow(name, url, kind, record) {
+    const checked = record.checkedAt ? new Date(record.checkedAt).toLocaleDateString() : '';
+    const matched = record.matched ? ` · "${record.matched}"` : '';
+    return `
+        <div class="au-results__row">
+            <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="au-results__name">${escapeHtml(name)}</a>
+            <span class="au-results__meta">${escapeHtml(`${kind}${matched}${checked ? ` · checked ${checked}` : ''}`)}</span>
+        </div>
+    `;
+}
+
+async function clearAuResults() {
+    if (!confirm('Clear all Taobao AU free shipping results?')) return;
+    await chrome.storage.local.remove(AuFreeShip.STORAGE_KEY);
 }
 
 function renderSupportAffiliateLink(agentId) {
