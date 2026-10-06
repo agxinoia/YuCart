@@ -178,6 +178,9 @@
         const host = url.hostname.toLowerCase();
         const isTaobao = /(^|\.)taobao\.com$/.test(host);
         const isTmall = /(^|\.)tmall\.com$/.test(host);
+        // Old links are often http://; Taobao serves everything over https, and
+        // that's the only scheme YuCart has access to.
+        if (url.protocol === 'http:') url.protocol = 'https:';
         if (/(^|\.)tb\.cn$/.test(host)) return { type: 'short', url: url.href };
         if (!isTaobao && !isTmall) return null;
 
