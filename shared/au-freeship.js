@@ -10,6 +10,8 @@
 (function initAuFreeShip(global) {
     const THRESHOLD_CNY = 249;
     const STORAGE_KEY = 'yucart_au_freeship';
+    // Set while a check is waiting for the user on the Taobao tab.
+    const WAITING_KEY = 'yucart_au_waiting';
     const SETTING_KEY = 'betaAuFreeShipEnabled';
 
     // Requested at runtime when the feature is switched on in settings.
@@ -46,6 +48,8 @@
     const PAGE_PATTERNS = Object.freeze({
         auContext: ['澳大利亚', '澳洲', 'australia'],
         security: ['拖动下方滑块', '滑动验证', '安全验证', '访问受限', 'unusual traffic', 'slide to verify', 'verify you are human'],
+        // Text of a real login form, as opposed to a blank session-refresh hop.
+        login: ['密码登录', '扫码登录', '短信登录', '手机号登录', '账号登录', 'sign in', 'log in', 'login'],
         unavailable: ['宝贝不存在', '宝贝已下架', '商品已下架', '商品不存在', 'item has been removed', 'no longer available']
     });
 
@@ -87,14 +91,24 @@
             detail: 'Opening the listing on Taobao in a background tab',
             tone: 'busy'
         },
+        waiting_login: {
+            label: 'Log in on Taobao tab',
+            detail: 'Taobao wants you to log in. Log in on the Taobao tab and the check carries on by itself',
+            tone: 'warn'
+        },
+        waiting_security: {
+            label: 'Finish Taobao check',
+            detail: 'Taobao is showing its verification slider. Complete it on the Taobao tab and the check carries on by itself',
+            tone: 'warn'
+        },
         login_required: {
             label: 'Log in to Taobao',
-            detail: 'Taobao asked you to log in. Log in on the tab that opened, then check again',
+            detail: 'The check stopped at Taobao\'s login page. Log in at taobao.com in this Chrome window, then check again',
             tone: 'warn'
         },
         security_check: {
             label: 'Taobao verification',
-            detail: 'Taobao showed a verification slider. Complete it on the tab that opened, then check again',
+            detail: 'The check stopped at Taobao\'s verification slider. Complete it on the Taobao tab, then check again',
             tone: 'warn'
         },
         region_unknown: {
@@ -226,6 +240,7 @@
             labelPatterns: LABEL_PATTERNS,
             auContextPatterns: PAGE_PATTERNS.auContext,
             securityPatterns: PAGE_PATTERNS.security,
+            loginPatterns: PAGE_PATTERNS.login,
             unavailablePatterns: PAGE_PATTERNS.unavailable,
             reservedSubdomains: RESERVED_SUBDOMAINS
         };
@@ -234,6 +249,7 @@
     global.YuCartAuFreeShip = Object.freeze({
         THRESHOLD_CNY,
         STORAGE_KEY,
+        WAITING_KEY,
         SETTING_KEY,
         OPTIONAL_ORIGINS,
         WIKI_SCRIPT,

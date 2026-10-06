@@ -1022,7 +1022,11 @@ async function handleAgentCheckoutTab(agentId, tabUrl) {
 // caches the answer per item, per Taobao shop and per Yupoo vendor.
 const AU_MAX_ITEMS_PER_CHECK = 3;
 const AU_MAX_ALBUM_FETCHES = 12;
+const AU_PAGE_LOAD_MS = 15000;
+const AU_USER_WAIT_MS = 3 * 60 * 1000;   // time to log in or pass the slider
+const AU_BLOCK_CONFIRM_POLLS = 3;        // ~3s before a login page counts
 let auCheckChain = Promise.resolve();
+let auActiveRun = null;                  // { waiting, handedToUser } for the running check
 
 // One check at a time: each one drives a Taobao tab, and opening several
 // Taobao pages at once makes its verification slider more likely.
@@ -1188,10 +1192,19 @@ function inspectTaobaoPage(config) {
   }
 
   const label = findLabel();
-  const loginFrame = Array.from(document.querySelectorAll('iframe[src*="login."], iframe[src*="passport."]')).some((frame) => {
-    const rect = frame.getBoundingClientRect();
-    return rect.width > 100 && rect.height > 100;
-  });
+
+  // Only a login form the user can actually see counts. Taobao refreshes
+  // sessions through blank pages on login.taobao.com, and keeps hidden or
+  // off-screen login frames around on normal pages.
+  const isOnScreen = (element) => {
+    if (element.checkVisibility && !element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+    const rect = element.getBoundingClientRect();
+    return rect.width > 100 && rect.height > 100 && rect.right > 0 && rect.bottom > 0 &&
+      rect.left < window.innerWidth && rect.top < window.innerHeight;
+  };
+  const login = /^(?:login|passport)\./.test(host)
+    ? hasAny(config.loginPatterns) || Array.from(document.querySelectorAll('input[type="password"]')).some(isVisible)
+    : Array.from(document.querySelectorAll('iframe[src*="login."], iframe[src*="passport."]')).some(isOnScreen);
 
   return {
     url: location.href,
@@ -1202,7 +1215,7 @@ function inspectTaobaoPage(config) {
     ready: bodyText.length > 200 && /[¥￥]\s*\d/.test(bodyText),
     auDelivery: !!label || hasAuDelivery(),
     security: /_____tmd_____|\/punish/i.test(location.href) || hasAny(config.securityPatterns),
-    login: /^(?:login|passport)\./.test(host) || loginFrame,
+    login,
     unavailable: hasAny(config.unavailablePatterns)
   };
 }
@@ -1217,23 +1230,72 @@ function auStatusFromPage(page) {
   return page.auDelivery ? 'not_found' : 'region_unknown';
 }
 
+// Bring the check tab to the front when Taobao needs the user (login or slider).
+async function handAuTabToUser(tabId) {
+  if (auActiveRun) auActiveRun.handedToUser = true;
+  const tab = await chrome.tabs.update(tabId, { active: true }).catch(() => null);
+  if (tab) chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+}
+
+async function setAuWaiting(status) {
+  if (!auActiveRun || auActiveRun.waiting === status) return;
+  auActiveRun.waiting = status;
+  if (status) {
+    await chrome.storage.local.set({ [AuFreeShip.WAITING_KEY]: { status, since: Date.now() } });
+  } else {
+    await chrome.storage.local.remove(AuFreeShip.WAITING_KEY);
+  }
+}
+
 // Load a URL in the check tab and poll until the tag shows up, the page is
-// clearly blocked, or it has rendered for a few polls without the tag.
+// clearly blocked, or it has rendered for a few polls without the tag. If
+// Taobao asks for a login or its slider, the tab is brought to the front and
+// the check waits for the user, then carries on.
 async function loadAndInspectTaobao(tabId, url, { itemId = '', wantItems = false } = {}) {
   await chrome.tabs.update(tabId, { url });
   await sleep(300);
   await waitForTabComplete(tabId);
 
   let page = null;
+  let deadline = Date.now() + AU_PAGE_LOAD_MS;
   let settledPolls = 0;
-  for (let attempt = 0; attempt < 12; attempt++) {
+  let blockedPolls = 0;
+  let waitedForUser = false;
+  let reopenedListing = false;
+  for (let attempt = 0; Date.now() < deadline; attempt++) {
     await sleep(attempt === 0 ? 1500 : 1000);
+    // The user closed the tab instead of logging in.
+    if (!(await chrome.tabs.get(tabId).catch(() => null))) break;
     const result = await runScriptInTab(tabId, inspectTaobaoPage, [AuFreeShip.inspectConfig()], 'MAIN');
     if (!result) continue;
     page = result;
-    if (page.security || page.login) return page;
-    // Ignore the previous page or a redirect to a different listing.
-    if (itemId && page.itemId !== itemId) continue;
+
+    // Taobao passes through login.taobao.com for a moment when it refreshes
+    // a session, so a login or slider only counts once it has stayed put.
+    if (page.security || page.login) {
+      settledPolls = 0;
+      if (++blockedPolls >= AU_BLOCK_CONFIRM_POLLS) {
+        if (!waitedForUser) {
+          waitedForUser = true;
+          deadline = Date.now() + AU_USER_WAIT_MS;
+          await handAuTabToUser(tabId);
+        }
+        await setAuWaiting(page.security ? 'waiting_security' : 'waiting_login');
+      }
+      continue;
+    }
+    blockedPolls = 0;
+    await setAuWaiting(null);
+
+    if (itemId && page.itemId !== itemId) {
+      // After logging in Taobao can land on its home page; go back once.
+      if (waitedForUser && !reopenedListing && page.ready) {
+        reopenedListing = true;
+        await chrome.tabs.update(tabId, { url });
+      }
+      // Otherwise this is the previous page or a redirect to another listing.
+      continue;
+    }
     if (page.label || page.unavailable) return page;
     const settled = wantItems ? page.itemIds.length > 0 : page.ready;
     if (settled && ++settledPolls >= 3) return page;
@@ -1255,19 +1317,38 @@ async function checkTaobaoItemInTab(tabId, itemId) {
   };
 }
 
+// The page a Taobao login URL will return to, e.g. the redirectURL in
+// login.taobao.com/member/login.jhtml?redirectURL=<listing>.
+function loginRedirectTarget(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    if (!/^(?:login|passport)\./.test(url.hostname)) return '';
+    for (const key of ['redirectURL', 'redirect_url', 'redirect', 'target', 'goto', 'return_url', 'returnUrl']) {
+      let value = url.searchParams.get(key) || '';
+      if (/^https?%3A/i.test(value)) value = decodeURIComponent(value);
+      if (value) return value;
+    }
+  } catch {
+    // Not a URL.
+  }
+  return '';
+}
+
 // Short links (m.tb.cn) only reveal the item or shop once they redirect.
 async function resolveTaobaoShortLink(tabId, shortUrl) {
   await chrome.tabs.update(tabId, { url: shortUrl });
+  let lastUrl = '';
   for (let attempt = 0; attempt < 15; attempt++) {
     await sleep(800);
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     if (!tab) return { status: 'error' };
-    const currentUrl = tab.pendingUrl || tab.url || '';
-    if (/^https?:\/\/(?:login|passport)\./i.test(currentUrl)) return { status: 'login_required' };
-    const link = AuFreeShip.parseTaobaoLink(currentUrl);
+    lastUrl = tab.pendingUrl || tab.url || '';
+    // A login page still names the listing it came from, so check that
+    // listing. If Taobao really needs a login, the listing check waits for it.
+    const link = AuFreeShip.parseTaobaoLink(loginRedirectTarget(lastUrl) || lastUrl);
     if (link && link.type !== 'short') return { link };
   }
-  return { status: 'error' };
+  return { status: /^https?:\/\/(?:login|passport)\./i.test(lastUrl) ? 'login_required' : 'error' };
 }
 
 // Most informative outcome of several item checks: any tagged item means the
@@ -1472,14 +1553,17 @@ async function checkYupooVendorInTab(tabId, vendor, productUrls, albumUrls) {
 }
 
 // target: { kind: 'taobao', url, vendor? } or { kind: 'yupoo', vendor, productUrls?, albumUrls? }
-async function runAuFreeShipCheck(target) {
+// openerTabId: the tab the check was started from, to return to afterwards.
+async function runAuFreeShipCheck(target, openerTabId = null) {
   if (!(await isAuFreeShipReady())) return { status: 'permission_required' };
 
   const vendor = /^[a-z0-9-]{1,64}$/.test(String(target?.vendor || '')) ? target.vendor : '';
   if (target?.kind === 'yupoo' && !vendor) return { status: 'no_links' };
   if (target?.kind !== 'yupoo' && !AuFreeShip.parseTaobaoLink(target?.url)) return { status: 'no_links' };
 
+  await chrome.storage.local.remove(AuFreeShip.WAITING_KEY);
   const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
+  auActiveRun = { waiting: null, handedToUser: false };
   let outcome = { status: 'error' };
   try {
     outcome = target.kind === 'yupoo'
@@ -1487,12 +1571,17 @@ async function runAuFreeShipCheck(target) {
       : await checkTaobaoTargetInTab(tab.id, target.url, vendor);
     return outcome;
   } finally {
-    // Leave Taobao in front when the user has to log in or pass the slider.
+    await setAuWaiting(null);
+    const handedToUser = auActiveRun.handedToUser;
+    auActiveRun = null;
     if (outcome.status === 'login_required' || outcome.status === 'security_check') {
+      // Leave Taobao in front when the user still has to log in or pass the slider.
       chrome.tabs.update(tab.id, { active: true }).catch(() => {});
       chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
     } else {
       chrome.tabs.remove(tab.id).catch(() => {});
+      // The user was sent to Taobao mid-check; take them back where they were.
+      if (handedToUser && openerTabId) chrome.tabs.update(openerTabId, { active: true }).catch(() => {});
     }
   }
 }
@@ -1736,7 +1825,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             sendResponse({ status: 'error' });
             break;
           }
-          const outcome = await enqueueAuCheck(() => runAuFreeShipCheck(msg.target));
+          const outcome = await enqueueAuCheck(() => runAuFreeShipCheck(msg.target, sender.tab?.id ?? null));
           sendResponse(outcome);
           break;
         }

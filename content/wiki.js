@@ -15,11 +15,13 @@
     const AuFreeShip = globalThis.YuCartAuFreeShip;
     if (!AuFreeShip) return;
 
-    // Pause between checks in "Check all" so Taobao doesn't throw up its slider.
-    const CHECK_DELAY_MS = 1500;
+    // Pause between checks in "Check unchecked": Taobao asks for a login or
+    // shows its slider sooner when listings are opened in quick succession.
+    const CHECK_DELAY_MS = 3000;
     const targets = new Map();   // key -> link target, one per seller/listing
     const pending = new Map();   // key -> 'checking' or a status that isn't cached
     let results = AuFreeShip.emptyResults();
+    let waiting = null;          // the running check is waiting for the user on Taobao
     let batch = null;            // { stopped, done, total } while "Check all" runs
     let panelNote = '';
     let panel = null;
@@ -48,7 +50,9 @@
     }
 
     function statusFor(target) {
-        return pending.get(target.key) || recordFor(target)?.status || 'unchecked';
+        const pendingStatus = pending.get(target.key);
+        if (pendingStatus === 'checking' && waiting) return waiting;
+        return pendingStatus || recordFor(target)?.status || 'unchecked';
     }
 
     function tooltip(status, record) {
@@ -129,7 +133,9 @@
         const checked = all.filter((target) => recordFor(target)).length;
         const eligible = all.filter((target) => recordFor(target)?.status === 'eligible').length;
         const stats = `${eligible} eligible · ${checked}/${all.length} sellers & listings checked`;
-        const note = batch ? `${batch.done} of ${batch.total} checked… (Taobao opens in a background tab)` : panelNote;
+        const note = waiting
+            ? `${AuFreeShip.describeStatus(waiting).detail}.`
+            : batch ? `${batch.done} of ${batch.total} checked… (Taobao opens in a background tab)` : panelNote;
         const batchLabel = batch ? 'Stop' : 'Check unchecked';
 
         setText(panel.querySelector('.yucart-wiki-panel__stats'), stats);
@@ -209,8 +215,14 @@
 
     // ── Init ───────────────────────────────────────────────────
     chrome.storage.onChanged.addListener((changes, area) => {
-        if (area !== 'local' || !changes[AuFreeShip.STORAGE_KEY]) return;
-        results = AuFreeShip.normalizeResults(changes[AuFreeShip.STORAGE_KEY].newValue);
+        if (area !== 'local') return;
+        if (!changes[AuFreeShip.STORAGE_KEY] && !changes[AuFreeShip.WAITING_KEY]) return;
+        if (changes[AuFreeShip.STORAGE_KEY]) {
+            results = AuFreeShip.normalizeResults(changes[AuFreeShip.STORAGE_KEY].newValue);
+        }
+        if (changes[AuFreeShip.WAITING_KEY]) {
+            waiting = changes[AuFreeShip.WAITING_KEY].newValue?.status || null;
+        }
         render();
     });
 
@@ -222,8 +234,9 @@
         if (hasNewContent && !scanTimer) scanTimer = setTimeout(annotateLinks, 300);
     });
 
-    chrome.storage.local.get(AuFreeShip.STORAGE_KEY).then((stored) => {
+    chrome.storage.local.get([AuFreeShip.STORAGE_KEY, AuFreeShip.WAITING_KEY]).then((stored) => {
         results = AuFreeShip.normalizeResults(stored[AuFreeShip.STORAGE_KEY]);
+        waiting = stored[AuFreeShip.WAITING_KEY]?.status || null;
         annotateLinks();
         observer.observe(document.body, { childList: true, subtree: true });
     });
