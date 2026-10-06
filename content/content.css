@@ -294,3 +294,126 @@
   color: #2ecc71 !important;
   flex-shrink: 0 !important;
 }
+
+/* ── Taobao AU Free Shipping (beta) ──────────────────────────── */
+.yucart-au-pill,
+.yucart-au-chip {
+  --yucart-au-color: #a8edea;
+  --yucart-au-border: rgba(168, 237, 234, 0.4);
+  --yucart-au-bg: rgba(168, 237, 234, 0.08);
+}
+
+.yucart-au-pill[data-tone="good"],
+.yucart-au-chip[data-tone="good"] {
+  --yucart-au-color: #2ecc71;
+  --yucart-au-border: rgba(46, 204, 113, 0.55);
+  --yucart-au-bg: rgba(46, 204, 113, 0.14);
+}
+
+.yucart-au-pill[data-tone="muted"],
+.yucart-au-chip[data-tone="muted"] {
+  --yucart-au-color: #a0a0bc;
+  --yucart-au-border: rgba(255, 255, 255, 0.14);
+  --yucart-au-bg: rgba(255, 255, 255, 0.05);
+}
+
+.yucart-au-pill[data-tone="warn"],
+.yucart-au-chip[data-tone="warn"] {
+  --yucart-au-color: #ffb35c;
+  --yucart-au-border: rgba(255, 179, 92, 0.5);
+  --yucart-au-bg: rgba(255, 179, 92, 0.12);
+}
+
+.yucart-au-pill {
+  display: inline-flex !important;
+  align-items: center !important;
+  padding: 7px 12px !important;
+  margin: 0 !important;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  line-height: 1.4 !important;
+  letter-spacing: 0.2px !important;
+  white-space: nowrap !important;
+  color: var(--yucart-au-color) !important;
+  background: var(--yucart-au-bg) !important;
+  border: 1px solid var(--yucart-au-border) !important;
+  border-radius: 999px !important;
+  cursor: pointer !important;
+  flex-shrink: 0 !important;
+  transition: transform 0.2s ease, opacity 0.2s ease !important;
+}
+
+.yucart-au-pill:hover {
+  transform: scale(1.03) !important;
+}
+
+.yucart-au-pill[data-tone="busy"],
+.yucart-au-chip[data-tone="busy"] .yucart-au-chip__main {
+  cursor: progress !important;
+  animation: yucart-au-pulse 1.2s ease-in-out infinite !important;
+}
+
+@keyframes yucart-au-pulse {
+  50% { opacity: 0.55; }
+}
+
+.yucart-au-chip {
+  position: fixed !important;
+  left: 24px !important;
+  bottom: 24px !important;
+  z-index: 2147483646 !important;
+  display: flex !important;
+  align-items: stretch !important;
+  max-width: calc(100vw - 48px) !important;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+  background: linear-gradient(135deg, #1a1a2e, #16213e) !important;
+  border: 1px solid var(--yucart-au-border) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4) !important;
+  overflow: hidden !important;
+}
+
+.yucart-au-chip__main {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  gap: 1px !important;
+  padding: 8px 12px !important;
+  margin: 0 !important;
+  background: var(--yucart-au-bg) !important;
+  border: none !important;
+  cursor: pointer !important;
+  text-align: left !important;
+}
+
+.yucart-au-chip__eyebrow {
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.4px !important;
+  text-transform: uppercase !important;
+  color: #8888a8 !important;
+}
+
+.yucart-au-chip__label {
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  color: var(--yucart-au-color) !important;
+  white-space: nowrap !important;
+}
+
+.yucart-au-chip__close {
+  padding: 0 10px !important;
+  margin: 0 !important;
+  font-size: 16px !important;
+  line-height: 1 !important;
+  color: #8888a8 !important;
+  background: transparent !important;
+  border: none !important;
+  border-left: 1px solid rgba(255, 255, 255, 0.06) !important;
+  cursor: pointer !important;
+}
+
+.yucart-au-chip__close:hover {
+  color: #e8e8f0 !important;
+}

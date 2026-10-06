@@ -39,6 +39,12 @@
     "https://api.open-meteo.com/*",
     "https://raw.githubusercontent.com/*"
   ],
+  "optional_host_permissions": [
+    "https://*.taobao.com/*",
+    "https://*.tmall.com/*",
+    "https://*.tb.cn/*",
+    "https://*.reddit.com/*"
+  ],
   "action": {
     "default_popup": "popup/popup.html",
     "default_icon": {
@@ -57,6 +63,7 @@
         "*://*.yupoo.com/*"
       ],
       "js": [
+        "shared/au-freeship.js",
         "content/content.js"
       ],
       "css": [

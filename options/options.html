@@ -163,6 +163,38 @@
                     <span class="toggle-text">Enable Auto Checkout (Beta)</span>
                 </label>
             </div>
+            <div class="field">
+                <label class="toggle-label">
+                    <input type="checkbox" id="betaAuFreeShipEnabled" class="toggle-input">
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-text">Taobao AU Free Shipping Finder (Beta)</span>
+                </label>
+                <p class="field__hint">Shows which sellers on Yupoo and the r/FashionReps wiki are in Taobao's Global
+                    Free Shipping Plan, which ships free to Australia on orders of ¥249+. YuCart opens their Taobao
+                    listings in a background tab and looks for the "境外满包邮" tag. You need to be logged in to Taobao
+                    with an Australian delivery address. Switching this on asks for access to taobao.com, tmall.com,
+                    tb.cn and reddit.com.</p>
+                <p class="field__hint field__hint--warn" id="auFreeShipHint" hidden></p>
+            </div>
+        </section>
+
+        <!-- Taobao AU Free Shipping Results -->
+        <section class="card" id="auResultsCard" hidden>
+            <h2 class="card__title">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="1" y="3" width="15" height="13"></rect>
+                    <polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon>
+                    <circle cx="5.5" cy="18.5" r="2.5"></circle>
+                    <circle cx="18.5" cy="18.5" r="2.5"></circle>
+                </svg>
+                Free Shipping to Australia
+            </h2>
+            <p class="card__desc" id="auResultsSummary"></p>
+            <div class="au-results" id="auResultsList"></div>
+            <div class="au-results__actions">
+                <button class="btn btn--secondary" id="clearAuResults" type="button">Clear results</button>
+            </div>
         </section>
 
         <!-- AI Name Cleaning Section -->
@@ -295,6 +327,7 @@
         </div>
     </div>
 
+    <script src="../shared/au-freeship.js"></script>
     <script src="options.js"></script>
 </body>
 
